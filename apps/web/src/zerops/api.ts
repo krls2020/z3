@@ -30,9 +30,34 @@ export function getToken(): string | null {
   }
 }
 
+const TOKEN_CHANGE_EVENT = "zerops:token-change";
+
+/** Notify same-tab listeners; `storage` only fires in *other* tabs. */
+function emitTokenChange(): void {
+  try {
+    window.dispatchEvent(new Event(TOKEN_CHANGE_EVENT));
+  } catch {
+    // Best-effort - a view that misses the signal still reads on next mount.
+  }
+}
+
+/** Subscribe to token changes from this tab and from other tabs. */
+export function subscribeToken(onChange: () => void): () => void {
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === null || event.key === TOKEN_STORAGE_KEY) onChange();
+  };
+  window.addEventListener(TOKEN_CHANGE_EVENT, onChange);
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    window.removeEventListener(TOKEN_CHANGE_EVENT, onChange);
+    window.removeEventListener("storage", handleStorage);
+  };
+}
+
 export function setToken(token: string): void {
   try {
     window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    emitTokenChange();
   } catch (cause) {
     throw new ZeropsApiError(
       cause instanceof Error ? `Failed to save token: ${cause.message}` : "Failed to save token.",
@@ -43,13 +68,17 @@ export function setToken(token: string): void {
 export function clearToken(): void {
   try {
     window.localStorage.removeItem(TOKEN_STORAGE_KEY);
+    emitTokenChange();
   } catch {
     // Best-effort — nothing to surface if local storage is unavailable.
   }
 }
 
 interface ZeropsUserInfoResponse {
-  readonly clientId?: string;
+  readonly clientUserList?: ReadonlyArray<{
+    readonly clientId?: string;
+    readonly client?: { readonly id?: string; readonly accountName?: string };
+  }>;
 }
 
 interface ZeropsProjectSearchItem {
@@ -151,6 +180,8 @@ export interface ZeropsProject {
   readonly id: string;
   readonly name: string;
   readonly status: string;
+  readonly clientId?: string;
+  readonly clientName?: string;
   readonly subdomainPrefix?: string;
   readonly zcpService?: {
     readonly name: string;
@@ -206,12 +237,31 @@ async function zeropsFetch<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 /** The org (client) id behind the current token. */
-export async function fetchClientId(): Promise<string> {
+export interface ZeropsClient {
+  readonly id: string;
+  readonly name: string;
+}
+
+/**
+ * The organisations this user belongs to.
+ *
+ * `/user/info` carries no top-level clientId: membership lives in
+ * `clientUserList`, and a user can belong to more than one org, so callers
+ * must handle a list rather than picking the first entry.
+ */
+export async function fetchClients(): Promise<ReadonlyArray<ZeropsClient>> {
   const info = await zeropsFetch<ZeropsUserInfoResponse>("/api/rest/public/user/info");
-  if (!info.clientId) {
-    throw new ZeropsApiError("Zerops user info response did not include a clientId.");
+  const memberships = info.clientUserList ?? [];
+  const clients = memberships
+    .map((m) => ({
+      id: m.clientId ?? m.client?.id ?? "",
+      name: m.client?.accountName ?? "",
+    }))
+    .filter((c) => c.id.length > 0);
+  if (clients.length === 0) {
+    throw new ZeropsApiError("This Zerops account is not a member of any organisation.");
   }
-  return info.clientId;
+  return clients;
 }
 
 /** Projects owned by the given org. Rows come back without service/subdomain info — resolve those per-project via `fetchProjectDetail` + `fetchServices`. */
@@ -230,6 +280,18 @@ export async function fetchProjects(clientId: string): Promise<ReadonlyArray<Zer
     name: item.name,
     status: item.status,
   }));
+}
+
+/** Projects across every org the user belongs to, tagged with their org. */
+export async function fetchAllProjects(): Promise<ReadonlyArray<ZeropsProject>> {
+  const clients = await fetchClients();
+  const perClient = await Promise.all(
+    clients.map(async (client) => {
+      const projects = await fetchProjects(client.id);
+      return projects.map((p) => ({ ...p, clientId: client.id, clientName: client.name }));
+    }),
+  );
+  return perClient.flat();
 }
 
 export async function fetchProjectDetail(projectId: string): Promise<ZeropsProjectDetailResponse> {

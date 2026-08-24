@@ -1,11 +1,11 @@
 import { Link } from "@tanstack/react-router";
 import { CloudIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import {
-  fetchClientId,
-  fetchProjects,
+  fetchAllProjects,
   getToken,
+  subscribeToken,
   ZeropsApiError,
   type ZeropsProject,
 } from "~/zerops/api";
@@ -22,9 +22,10 @@ import { ZeropsProjectDetail } from "./ZeropsProjectDetail";
 import { ZeropsProjectList } from "./ZeropsProjectList";
 
 export function ZeropsProjectsPage() {
-  // Read once at mount — this page doesn't need to react live to a token
-  // saved elsewhere; navigating back here after Settings re-mounts it.
-  const [token] = useState<string | null>(() => getToken());
+  // Subscribed, not sampled: the token is entered in Settings and this page
+  // is reached by client-side navigation, so a mount-time read would show the
+  // empty state until a hard reload.
+  const token = useSyncExternalStore(subscribeToken, getToken, () => null);
   const [projects, setProjects] = useState<ReadonlyArray<ZeropsProject>>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [projectsError, setProjectsError] = useState<string | null>(null);
@@ -46,8 +47,7 @@ export function ZeropsProjectsPage() {
 
     void (async () => {
       try {
-        const clientId = await fetchClientId();
-        const list = await fetchProjects(clientId);
+        const list = await fetchAllProjects();
         if (isCancelled()) return;
         setProjects(list);
         setIsLoadingProjects(false);

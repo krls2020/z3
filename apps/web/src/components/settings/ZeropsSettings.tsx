@@ -12,8 +12,7 @@ import { connectPairing as connectPairingAtom } from "~/connection/onboarding";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   clearToken,
-  fetchClientId,
-  fetchProjects,
+  fetchAllProjects,
   getToken,
   resolveProjectZcpService,
   setToken,
@@ -290,8 +289,7 @@ export function ZeropsSettings() {
 
     void (async () => {
       try {
-        const clientId = await fetchClientId();
-        const projects = await fetchProjects(clientId);
+        const projects = await fetchAllProjects();
         if (isCancelled()) return;
         setRows(
           projects.map((project) => ({ project, resolution: { status: "pending" as const } })),
