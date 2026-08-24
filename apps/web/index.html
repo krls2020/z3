@@ -23,12 +23,12 @@
           light: {
             background: "#ffffff",
             foreground: "#262626",
-            accent: "#4f46e5",
+            accent: "#00b1a3",
           },
           dark: {
             background: "#0a0a0a",
             foreground: "#f5f5f5",
-            accent: "#818cf8",
+            accent: "#00ded0",
           },
         };
         // These are the runtime defaults used to complete a custom palette
@@ -52,6 +52,20 @@
         // Keep this small boot-time copy in sync with the built-in palettes so
         // the selected theme is visible before the app has mounted.
         const BUILT_IN_THEME_PALETTES = {
+          zerops: {
+            light: {
+              background: "oklch(0.972369 0.005497 184.900)",
+              foreground: "oklch(0.222003 0.03479 328.979)",
+              accent: "oklch(0.683663 0.120516 184.935)",
+              chrome: "oklch(0.972369 0.005497 184.900)",
+            },
+            dark: {
+              background: "oklch(0.260865 0.02152 186.500)",
+              foreground: "oklch(0.990339 0.008411 325.64)",
+              accent: "oklch(0.810765 0.141718 186.761)",
+              chrome: "oklch(0.260865 0.02152 186.500)",
+            },
+          },
           "t3-chat": {
             light: {
               background: "oklch(0.982446 0.010114 325.653)",
@@ -132,6 +146,7 @@
           ]),
         );
         const RESERVED_THEME_IDS = [
+          "zerops",
           "system",
           "light",
           "dark",

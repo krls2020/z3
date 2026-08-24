@@ -68,6 +68,7 @@ export type ThemeFile = Readonly<{
 }>;
 
 const RESERVED_THEME_IDS = new Set([
+  "zerops",
   "system",
   "light",
   "dark",
