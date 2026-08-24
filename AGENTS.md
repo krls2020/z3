@@ -1,3 +1,8 @@
+> **This is `z3`, a Zerops fork of T3 Code.** Read [`README.md`](README.md) first — it covers what
+> is Zerops-specific, what was verified live, and the fork rules (changes stay additive so we can
+> rebase on upstream). Everything below is upstream's guide and still describes this codebase
+> accurately; where the two disagree about product name or scope, the README wins.
+
 # T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs (Codex, Claude Code, Cursor, Grok, OpenCode) and serves web, desktop, and mobile clients.
