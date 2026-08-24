@@ -70,22 +70,81 @@ interface ZeropsProjectDetailResponse {
   readonly zeropsSubdomainHost?: string;
 }
 
-interface ZeropsServicePort {
+export interface ZeropsServicePort {
   readonly port: number;
-  readonly scheme: string;
+  readonly protocol?: string;
+  readonly scheme?: string;
 }
 
-interface ZeropsServiceStackItem {
+export interface ZeropsServiceStackTypeInfo {
+  readonly serviceStackTypeName: string;
+  readonly serviceStackTypeVersionName: string;
+  readonly serviceStackTypeCategory: string;
+}
+
+export interface ZeropsResourceEnvelope {
+  readonly cpuCoreCount: number;
+  readonly memoryGBytes: number;
+  readonly diskGBytes: number;
+}
+
+export interface ZeropsVerticalAutoscaling {
+  readonly minResource: ZeropsResourceEnvelope;
+  readonly maxResource: ZeropsResourceEnvelope;
+  readonly cpuMode: string;
+}
+
+/** A service's live entry in a project's service-stack — one runtime, managed dependency, or system service. */
+export interface ZeropsService {
   readonly id: string;
   readonly name: string;
   readonly status: string;
+  readonly isSystem: boolean;
   readonly subdomainAccess?: boolean;
   readonly ports: ReadonlyArray<ZeropsServicePort>;
+  readonly serviceStackTypeInfo: ZeropsServiceStackTypeInfo;
+  readonly currentAutoscaling?: {
+    readonly verticalAutoscaling?: ZeropsVerticalAutoscaling;
+  };
 }
 
 interface ZeropsServiceStackResponse {
-  readonly list: ReadonlyArray<ZeropsServiceStackItem>;
+  readonly list: ReadonlyArray<ZeropsService>;
   readonly totalCount: number;
+}
+
+/** The three groups the Zerops projects page renders services into, derived from `serviceStackTypeCategory`. */
+export type ZeropsServiceGroup = "runtimes" | "data" | "infrastructure";
+
+/** `USER` → Runtimes, `STANDARD`/`OBJECT_STORAGE` → Data, everything else (`CORE`, `BUILD`, ...) → Infrastructure. */
+export function categorizeService(service: ZeropsService): ZeropsServiceGroup {
+  switch (service.serviceStackTypeInfo.serviceStackTypeCategory) {
+    case "USER":
+      return "runtimes";
+    case "STANDARD":
+    case "OBJECT_STORAGE":
+      return "data";
+    default:
+      return "infrastructure";
+  }
+}
+
+export interface ZeropsServiceSummary {
+  readonly runtimeCount: number;
+  readonly dataCount: number;
+  readonly infrastructureCount: number;
+}
+
+/** Compact per-project counts for the projects list, e.g. "4 runtimes · 2 data". */
+export function summarizeServices(services: ReadonlyArray<ZeropsService>): ZeropsServiceSummary {
+  const summary = { runtimeCount: 0, dataCount: 0, infrastructureCount: 0 };
+  for (const service of services) {
+    const group = categorizeService(service);
+    if (group === "runtimes") summary.runtimeCount += 1;
+    else if (group === "data") summary.dataCount += 1;
+    else summary.infrastructureCount += 1;
+  }
+  return summary;
 }
 
 export interface ZeropsProject {
@@ -177,9 +236,7 @@ export async function fetchProjectDetail(projectId: string): Promise<ZeropsProje
   return zeropsFetch<ZeropsProjectDetailResponse>(`/api/rest/public/project/${projectId}`);
 }
 
-export async function fetchServices(
-  projectId: string,
-): Promise<ReadonlyArray<ZeropsServiceStackItem>> {
+export async function fetchServices(projectId: string): Promise<ReadonlyArray<ZeropsService>> {
   const response = await zeropsFetch<ZeropsServiceStackResponse>(
     `/api/rest/public/project/${projectId}/service-stack`,
   );
@@ -224,5 +281,29 @@ export async function resolveProjectZcpService(
   return {
     ...(subdomainPrefix ? { subdomainPrefix } : {}),
     ...(zcpService ? { zcpService } : {}),
+  };
+}
+
+export interface ZeropsProjectOverview {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+  readonly subdomainPrefix?: string;
+  readonly services: ReadonlyArray<ZeropsService>;
+}
+
+/** Full detail for the Zerops projects page: project identity plus every service in its stack. */
+export async function fetchProjectOverview(projectId: string): Promise<ZeropsProjectOverview> {
+  const [detail, services] = await Promise.all([
+    fetchProjectDetail(projectId),
+    fetchServices(projectId),
+  ]);
+
+  return {
+    id: detail.id,
+    name: detail.name,
+    status: detail.status,
+    ...(detail.zeropsSubdomainHost ? { subdomainPrefix: detail.zeropsSubdomainHost } : {}),
+    services,
   };
 }

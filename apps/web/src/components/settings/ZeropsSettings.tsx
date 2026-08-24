@@ -21,11 +21,11 @@ import {
   type ZeropsProject,
 } from "~/zerops/api";
 
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Input } from "../ui/input";
 import { Spinner } from "../ui/spinner";
+import { StatusPill } from "../zerops/statusBadge";
 import { ITEM_ROW_CLASSNAME, ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -83,37 +83,6 @@ async function resolveRowsWithConcurrency(
   }
 
   await Promise.all(Array.from({ length: Math.min(limit, projectIds.length) }, () => runNext()));
-}
-
-// Mirrors the Badge component's own color variants so the pill palette stays
-// tied to the app's semantic tokens instead of one-off hex values.
-type StatusPillVariant = "success" | "info" | "warning" | "error" | "secondary";
-
-function statusBadgeVariant(status: string): StatusPillVariant {
-  switch (status) {
-    case "ACTIVE":
-      return "success";
-    case "READY_TO_DEPLOY":
-    case "NEW":
-    case "CREATING":
-      return "info";
-    case "STOPPING":
-    case "STOPPED":
-      return "warning";
-    case "FAILED":
-    case "DELETING":
-      return "error";
-    default:
-      return "secondary";
-  }
-}
-
-function StatusPill({ status }: { readonly status: string }) {
-  return (
-    <Badge variant={statusBadgeVariant(status)} className="font-normal">
-      {status}
-    </Badge>
-  );
 }
 
 function TokenGate({ onTokenSaved }: { readonly onTokenSaved: (token: string) => void }) {

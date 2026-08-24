@@ -1,6 +1,7 @@
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
+  CloudIcon,
   GitPullRequestIcon,
   SettingsIcon,
 } from "lucide-react";
@@ -169,9 +170,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         ? "settings"
         : location.pathname === "/usage"
           ? "usage"
-          : location.pathname === "/pull-requests"
-            ? "pull-requests"
-            : null,
+          : location.pathname === "/zerops"
+            ? "zerops"
+            : location.pathname === "/pull-requests"
+              ? "pull-requests"
+              : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -198,6 +201,13 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       setOpenMobile(false);
     }
     void navigate({ to: "/usage" });
+  }, [isMobile, navigate, setOpenMobile]);
+
+  const handleZeropsClick = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+    void navigate({ to: "/zerops" });
   }, [isMobile, navigate, setOpenMobile]);
 
   const handleBackClick = useCallback(() => {
@@ -237,6 +247,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          <SidebarUtilityItem icon={<CloudIcon />} label="Zerops" onClick={handleZeropsClick} />
         </>
       )}
       <SidebarUpdatePill />
