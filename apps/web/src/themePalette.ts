@@ -9,6 +9,7 @@ import {
   OCEAN_THEME,
   T3_CHAT_THEME,
   THEME_COLOR_ROLES,
+  ZEROPS_THEME,
   type ThemeAppearance,
   type ThemeColorRole,
   type ThemeColors,
@@ -16,9 +17,19 @@ import {
   type ThemeVariants,
 } from "@t3tools/shared/themePalettes";
 
-export { EMBER_THEME, GROVE_THEME, IRIS_THEME, OCEAN_THEME, T3_CHAT_THEME, THEME_COLOR_ROLES };
+export {
+  EMBER_THEME,
+  GROVE_THEME,
+  IRIS_THEME,
+  OCEAN_THEME,
+  T3_CHAT_THEME,
+  THEME_COLOR_ROLES,
+  ZEROPS_THEME,
+};
 export type { ThemeAppearance, ThemeColorRole, ThemeColors, ThemeDefinition, ThemeVariants };
 
+export const ZEROPS_THEME_ID = "zerops" as const;
+export const ZEROPS_THEME_LABEL = "Zerops";
 export const T3_CHAT_THEME_ID = "t3-chat" as const;
 export const T3_CHAT_THEME_LABEL = "T3 Chat";
 export const GROVE_THEME_ID = "grove" as const;
