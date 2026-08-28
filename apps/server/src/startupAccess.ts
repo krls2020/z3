@@ -4,7 +4,8 @@ import { QrCode } from "@t3tools/shared/qrCode";
 import * as Effect from "effect/Effect";
 import { HttpServer } from "effect/unstable/http";
 
-import { ServerConfig } from "./config.ts";
+import { ServerConfig, type StartupPresentation } from "./config.ts";
+import type { ZeropsEnvironment } from "./zerops/ZeropsEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { withBasePath } from "@t3tools/shared/basePath";
 
@@ -132,14 +133,54 @@ export const formatHeadlessServeOutput = (accessInfo: HeadlessServeAccessInfo): 
     "",
   ].join("\n");
 
-export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
+/**
+ * Which of the three things a boot announces.
+ *
+ * Upstream has two, and both mint an `administrative-bootstrap` pairing
+ * credential with administrative scopes: `headless` prints it, `browser` turns
+ * it into a `/pair#token=` link. Whoever can read the process output therefore
+ * gets an admin credential on every boot - survivable when the reader is the
+ * person who started the server on their own machine, not when the process is
+ * a supervised unit in a container whose logs are an operations surface.
+ *
+ * Inside a Zerops project neither path runs. Nothing is minted at boot at all:
+ * the way in is the identity door, where the caller proves who they are.
+ */
+export type StartupAccessMode = "zerops" | "headless" | "browser";
+
+export const resolveStartupAccessMode = (config: {
+  readonly zerops: ZeropsEnvironment | undefined;
+  readonly startupPresentation: StartupPresentation;
+}): StartupAccessMode =>
+  config.zerops !== undefined
+    ? "zerops"
+    : config.startupPresentation === "headless"
+      ? "headless"
+      : "browser";
+
+/** What a Zerops container prints in place of a credential. */
+export const formatZeropsServeOutput = (connectionString: string): string =>
+  [
+    "Zerops Code is ready.",
+    `Address: ${connectionString}`,
+    "Sign in with your Zerops account - members of this project are let in by",
+    "their Zerops identity, so no pairing code is issued here.",
+    "",
+  ].join("\n");
+
+/** The address this server answers on, without minting anything. */
+export const resolveServeConnectionString = Effect.fn("resolveServeConnectionString")(function* () {
   const serverConfig = yield* ServerConfig;
   const httpServer = yield* HttpServer.HttpServer;
-  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
-  const connectionString = resolveHeadlessConnectionString(
+  return resolveHeadlessConnectionString(
     serverConfig.host,
     resolveListeningPort(httpServer.address, serverConfig.port),
   );
+});
+
+export const issueHeadlessServeAccessInfo = Effect.fn("issueHeadlessServeAccessInfo")(function* () {
+  const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const connectionString = yield* resolveServeConnectionString();
   const issued = yield* serverAuth.issueStartupPairingCredential();
 
   return {
