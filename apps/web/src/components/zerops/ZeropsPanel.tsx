@@ -29,7 +29,7 @@ export function ZeropsPanel({
     <ScrollArea className="h-full">
       <div className="p-4">
         {view === undefined ? (
-          <p className="text-muted-foreground text-sm">This environment is not a Zerops project.</p>
+          <ZeropsPanelPlaceholder waiting={topology === undefined} />
         ) : (
           <div className="space-y-4">
             <ZeropsServiceMap view={view} />
@@ -38,5 +38,21 @@ export function ZeropsPanel({
         )}
       </div>
     </ScrollArea>
+  );
+}
+
+/**
+ * Two different reasons the map is absent, and they must not share a sentence.
+ *
+ * The panel's tab is persisted per thread, so a reload can render this surface
+ * before the first snapshot has arrived. Saying "not a Zerops project" then
+ * would be a confident lie about the very project the user is looking at, told
+ * for the second or so before the feed answers.
+ */
+export function ZeropsPanelPlaceholder({ waiting }: { readonly waiting: boolean }) {
+  return (
+    <p className="text-muted-foreground text-sm" data-zerops-panel-placeholder>
+      {waiting ? "Reading the project…" : "This environment is not a Zerops project."}
+    </p>
   );
 }
