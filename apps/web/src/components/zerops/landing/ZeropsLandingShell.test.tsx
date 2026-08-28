@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   ZEROPS_GUI_REGISTRATION_URL,
+  ZeropsHandedOffBanner,
   ZeropsLandingShell,
   ZeropsRegisterForm,
   ZeropsRegistrationUnavailable,
@@ -91,7 +92,11 @@ describe("ZeropsLandingShell", () => {
 describe("ZeropsRegistrationUnavailable", () => {
   it("sends the user to the Zerops sign-up that the captcha does allow, with the pool claim", () => {
     const markup = renderToStaticMarkup(
-      <ZeropsRegistrationUnavailable reason="Domain not authorized (110200)" onSignIn={noop} />,
+      <ZeropsRegistrationUnavailable
+        reason="Domain not authorized (110200)"
+        onSignIn={noop}
+        onHandOff={noop}
+      />,
     );
 
     expect(ZEROPS_GUI_REGISTRATION_URL).toBe("https://app.zerops.io/registration?zcp=true");
@@ -100,13 +105,44 @@ describe("ZeropsRegistrationUnavailable", () => {
     expect(markup).toContain('rel="noreferrer"');
   });
 
-  it("names why registration cannot happen here, and offers the way back in", () => {
+  it("keeps the reason available in a smaller line, without leading with it", () => {
     const markup = renderToStaticMarkup(
-      <ZeropsRegistrationUnavailable reason="Domain not authorized (110200)" onSignIn={noop} />,
+      <ZeropsRegistrationUnavailable
+        reason="Domain not authorized (110200)"
+        onSignIn={noop}
+        onHandOff={noop}
+      />,
     );
 
+    expect(markup).toContain("Sign-up runs on app.zerops.io.");
     expect(markup).toContain("Domain not authorized (110200)");
     // Signing up elsewhere is only useful if the flow continues here.
     expect(markup).toMatch(/sign in/i);
+  });
+});
+
+describe("ZeropsHandedOffBanner", () => {
+  it("explains the hand-off and still lets the user open the sign-up page again", () => {
+    const markup = renderToStaticMarkup(<ZeropsHandedOffBanner onOpenSignUpAgain={noop} />);
+
+    expect(markup).toContain(
+      "Finish creating your account in the Zerops tab — it prepares a project with Zerops Code for you. Then sign in here.",
+    );
+    expect(markup).toContain("Open the sign-up page again");
+    expect(markup).toContain(ZEROPS_GUI_REGISTRATION_URL.replace(/&/g, "&amp;"));
+    expect(markup).toContain('target="_blank"');
+  });
+
+  it("renders alongside a working sign-in form", () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <ZeropsHandedOffBanner onOpenSignUpAgain={noop} />
+        <ZeropsSignInForm busy={false} error={null} onSubmit={noop} onSwitchToRegister={noop} />
+      </>,
+    );
+
+    expect(markup).toContain("Finish creating your account");
+    expect(markup).toContain('name="email"');
+    expect(markup).toContain('type="password"');
   });
 });

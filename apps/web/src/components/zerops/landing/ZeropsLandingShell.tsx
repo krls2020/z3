@@ -99,28 +99,39 @@ export const ZEROPS_GUI_REGISTRATION_URL = "https://app.zerops.io/registration?z
  * Cloudflare Turnstile only renders on hostnames its site key allows, and the
  * platform refuses a registration without a token — so on any other origin
  * signing up here is impossible until Zerops allows the hostname. Rather than
- * a dead form, the user gets the sign-up that does work and a way back.
+ * a dead form, the primary action is a real hand-off to the sign-up that does
+ * work, with a way back once it is done.
  */
 export function ZeropsRegistrationUnavailable({
   reason,
   onSignIn,
+  onHandOff,
 }: {
   readonly reason: string;
   readonly onSignIn: () => void;
+  /** Called when the user follows the hand-off; the caller opens the tab and moves the landing on. */
+  readonly onHandOff: () => void;
 }) {
   return (
     <div className="space-y-4">
       <p className="text-sm text-foreground">
         Creating an account is not available from this address yet.
       </p>
-      <p className="text-xs text-muted-foreground">
-        The Zerops sign-up form protects itself with a captcha that only runs on Zerops&apos; own
-        pages. Reported reason: {reason}
-      </p>
+      <p className="text-xs text-muted-foreground">Sign-up runs on app.zerops.io.</p>
       <Button
         className="w-full"
         render={
-          <a href={ZEROPS_GUI_REGISTRATION_URL} target="_blank" rel="noreferrer">
+          <a
+            href={ZEROPS_GUI_REGISTRATION_URL}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => {
+              // The href/target already work with no JS at all; when JS does
+              // run, the caller takes over so it can also move the landing on.
+              event.preventDefault();
+              onHandOff();
+            }}
+          >
             <ExternalLinkIcon className="size-4" />
             Sign up at app.zerops.io
           </a>
@@ -136,6 +147,39 @@ export function ZeropsRegistrationUnavailable({
           Sign in here
         </button>
       </p>
+      <p className="text-center text-[11px] text-muted-foreground/70">Reported reason: {reason}</p>
+    </div>
+  );
+}
+
+/**
+ * Shown above the sign-in form once the user has been sent to app.zerops.io
+ * to register: the account they are creating there already comes with a
+ * project prepared, so the way back in is to sign in, not to register again.
+ */
+export function ZeropsHandedOffBanner({
+  onOpenSignUpAgain,
+}: {
+  readonly onOpenSignUpAgain: () => void;
+}) {
+  return (
+    <div className="mb-4 space-y-2 rounded-2xl border border-border/55 bg-card/30 px-4 py-3 text-xs text-muted-foreground">
+      <p>
+        Finish creating your account in the Zerops tab — it prepares a project with Zerops Code for
+        you. Then sign in here.
+      </p>
+      <a
+        href={ZEROPS_GUI_REGISTRATION_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2 hover:text-foreground"
+        onClick={(event) => {
+          event.preventDefault();
+          onOpenSignUpAgain();
+        }}
+      >
+        Open the sign-up page again
+      </a>
     </div>
   );
 }

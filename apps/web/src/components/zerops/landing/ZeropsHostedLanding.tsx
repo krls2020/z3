@@ -13,6 +13,8 @@ import { useZeropsTurnstile } from "~/zerops/turnstile";
 
 import { ZeropsProjectsPage } from "../ZeropsProjectsPage";
 import {
+  ZEROPS_GUI_REGISTRATION_URL,
+  ZeropsHandedOffBanner,
   ZeropsLandingShell,
   ZeropsRegisterForm,
   ZeropsRegistrationUnavailable,
@@ -20,7 +22,12 @@ import {
   ZeropsTotpForm,
 } from "./ZeropsLandingShell";
 
-type LandingMode = "sign-in" | "register";
+type LandingMode = "sign-in" | "register" | "handed-off";
+
+/** Opens the platform's own sign-up in a new tab, the way a plain link click would. */
+function openZeropsSignUpTab(): void {
+  window.open(ZEROPS_GUI_REGISTRATION_URL, "_blank", "noopener,noreferrer");
+}
 
 export function ZeropsHostedLanding({ manualFallback }: { readonly manualFallback: ReactNode }) {
   const { status, signIn, register, verifyTotp } = useZeropsSession();
@@ -126,8 +133,38 @@ export function ZeropsHostedLanding({ manualFallback }: { readonly manualFallbac
             onSwitchToSignIn={showSignIn}
           />
         ) : (
-          <ZeropsRegistrationUnavailable reason={unavailable} onSignIn={showSignIn} />
+          <ZeropsRegistrationUnavailable
+            reason={unavailable}
+            onSignIn={showSignIn}
+            onHandOff={() => {
+              openZeropsSignUpTab();
+              setMode("handed-off");
+            }}
+          />
         )}
+      </ZeropsLandingShell>
+    );
+  }
+
+  if (mode === "handed-off") {
+    return (
+      <ZeropsLandingShell
+        title="Sign in to Zerops"
+        description="Pick a project and start talking to the agent inside it."
+        onManualConnect={openManual}
+      >
+        <ZeropsHandedOffBanner onOpenSignUpAgain={openZeropsSignUpTab} />
+        <ZeropsSignInForm
+          busy={busy}
+          error={error}
+          onSubmit={({ email, password }) => {
+            run(() => signIn(email, password));
+          }}
+          onSwitchToRegister={() => {
+            setError(null);
+            setMode("register");
+          }}
+        />
       </ZeropsLandingShell>
     );
   }
