@@ -5,9 +5,10 @@ import * as Logger from "effect/Logger";
 import * as Ref from "effect/Ref";
 import { TestClock } from "effect/testing";
 
+import { ZeropsCliFailed, ZeropsCliNotFound } from "./ZeropsCli.ts";
+import { parseZeropsTopology, type ZeropsTopologyRead } from "./zeropsTopologyParse.ts";
 import {
   REPOSITORY_CACHE_TTL,
-  ZeropsTopologyUnavailable,
   makeZeropsRepositorySource,
   selectRepositories,
 } from "./ZeropsRepositorySource.ts";
@@ -17,49 +18,59 @@ import {
  * marshals (`internal/ops/discover.go`): `mountPath` present only for a
  * service whose `/var/www/<hostname>` directory exists on the container.
  */
-const topologyJson = JSON.stringify({
-  project: { id: "nTV3oMB2SS634ImDJnQckg", name: "z3-eval", status: "ACTIVE" },
-  services: [
-    {
-      hostname: "kanbandev",
-      serviceId: "aaa",
-      type: "ubuntu/nodejs@22",
-      status: "ACTIVE",
-      adoptionState: "adopted",
-      isInfrastructure: false,
-      mountPath: "/var/www/kanbandev",
-    },
-    {
-      hostname: "apidev",
-      serviceId: "bbb",
-      type: "ubuntu/go@1.22",
-      status: "ACTIVE",
-      adoptionState: "adoptable",
-      isInfrastructure: false,
-      mountPath: "/var/www/apidev",
-    },
-    {
-      hostname: "kanbanstage",
-      serviceId: "ccc",
-      type: "ubuntu/nodejs@22",
-      status: "ACTIVE",
-      adoptionState: "adopted",
-      isInfrastructure: false,
-    },
-    {
-      hostname: "db",
-      serviceId: "ddd",
-      type: "postgresql@16",
-      status: "ACTIVE",
-      adoptionState: "managed-dep",
-      isInfrastructure: true,
-      mountPath: "/var/www/db",
-    },
-  ],
-});
+const topologyRead = (json: string): ZeropsTopologyRead => {
+  const parsed = parseZeropsTopology(json);
+  assert.isDefined(parsed);
+  return parsed;
+};
+
+const topology = topologyRead(
+  JSON.stringify({
+    project: { id: "nTV3oMB2SS634ImDJnQckg", name: "z3-eval", status: "ACTIVE" },
+    services: [
+      {
+        hostname: "kanbandev",
+        serviceId: "aaa",
+        type: "ubuntu/nodejs@22",
+        status: "ACTIVE",
+        adoptionState: "adopted",
+        isInfrastructure: false,
+        mountPath: "/var/www/kanbandev",
+      },
+      {
+        hostname: "apidev",
+        serviceId: "bbb",
+        type: "ubuntu/go@1.22",
+        status: "ACTIVE",
+        adoptionState: "adoptable",
+        isInfrastructure: false,
+        mountPath: "/var/www/apidev",
+      },
+      {
+        hostname: "kanbanstage",
+        serviceId: "ccc",
+        type: "ubuntu/nodejs@22",
+        status: "ACTIVE",
+        adoptionState: "adopted",
+        isInfrastructure: false,
+      },
+      {
+        hostname: "db",
+        serviceId: "ddd",
+        type: "postgresql@16",
+        status: "ACTIVE",
+        adoptionState: "managed-dep",
+        isInfrastructure: true,
+        mountPath: "/var/www/db",
+      },
+    ],
+  }),
+);
 
 /** A reader that answers from a script, counting how often it was consulted. */
-const scriptedReader = (answers: ReadonlyArray<Effect.Effect<string, ZeropsTopologyUnavailable>>) =>
+const scriptedReader = (
+  answers: ReadonlyArray<Effect.Effect<ZeropsTopologyRead, ZeropsCliFailed | ZeropsCliNotFound>>,
+) =>
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const read = Effect.gen(function* () {
@@ -73,7 +84,7 @@ const scriptedReader = (answers: ReadonlyArray<Effect.Effect<string, ZeropsTopol
 
 describe("selectRepositories — topology JSON to the repository set", () => {
   it("keeps mounted runtimes and drops everything else", () => {
-    const result = selectRepositories(topologyJson);
+    const result = selectRepositories(topology);
     assert.strictEqual(result._tag, "available");
     if (result._tag !== "available") {
       return;
@@ -86,10 +97,20 @@ describe("selectRepositories — topology JSON to the repository set", () => {
 
   it("a project with no mounted runtime is available and empty, never unavailable", () => {
     const result = selectRepositories(
-      JSON.stringify({
-        project: { id: "p" },
-        services: [{ hostname: "db", isInfrastructure: true }],
-      }),
+      topologyRead(
+        JSON.stringify({
+          project: { id: "p", name: "p" },
+          services: [
+            {
+              hostname: "db",
+              serviceId: "d",
+              type: "postgresql@16",
+              status: "ACTIVE",
+              isInfrastructure: true,
+            },
+          ],
+        }),
+      ),
     );
     assert.strictEqual(result._tag, "available");
     if (result._tag === "available") {
@@ -97,16 +118,17 @@ describe("selectRepositories — topology JSON to the repository set", () => {
     }
   });
 
-  it("unparseable output is unavailable, not an empty list", () => {
-    const result = selectRepositories("auth: no credentials\n");
-    assert.strictEqual(result._tag, "unavailable");
+  it("output that is not a topology never reaches the mapper at all", () => {
+    // Parsing is zcp's CLI seam now; an unparseable answer is a ZeropsCliFailed
+    // before it gets here, which is what the source turns into `unavailable`.
+    assert.isUndefined(parseZeropsTopology("auth: no credentials\n"));
   });
 });
 
 describe("ZeropsRepositorySource", () => {
   it.effect("is disabled off Zerops and never consults the reader", () =>
     Effect.gen(function* () {
-      const reader = yield* scriptedReader([Effect.succeed(topologyJson)]);
+      const reader = yield* scriptedReader([Effect.succeed(topology)]);
       const source = yield* makeZeropsRepositorySource({ enabled: false, read: reader.read });
 
       const result = yield* source.list;
@@ -118,7 +140,7 @@ describe("ZeropsRepositorySource", () => {
 
   it.effect("reads once and serves the cached answer inside the TTL", () =>
     Effect.gen(function* () {
-      const reader = yield* scriptedReader([Effect.succeed(topologyJson)]);
+      const reader = yield* scriptedReader([Effect.succeed(topology)]);
       const source = yield* makeZeropsRepositorySource({ enabled: true, read: reader.read });
 
       yield* source.list;
@@ -132,7 +154,7 @@ describe("ZeropsRepositorySource", () => {
 
   it.effect("re-reads once the TTL has elapsed", () =>
     Effect.gen(function* () {
-      const reader = yield* scriptedReader([Effect.succeed(topologyJson)]);
+      const reader = yield* scriptedReader([Effect.succeed(topology)]);
       const source = yield* makeZeropsRepositorySource({ enabled: true, read: reader.read });
 
       yield* source.list;
@@ -145,7 +167,7 @@ describe("ZeropsRepositorySource", () => {
 
   it.effect("refresh bypasses the TTL", () =>
     Effect.gen(function* () {
-      const reader = yield* scriptedReader([Effect.succeed(topologyJson)]);
+      const reader = yield* scriptedReader([Effect.succeed(topology)]);
       const source = yield* makeZeropsRepositorySource({ enabled: true, read: reader.read });
 
       yield* source.list;
@@ -158,7 +180,9 @@ describe("ZeropsRepositorySource", () => {
   it.effect("a failing topology read degrades to unavailable and names the reason", () =>
     Effect.gen(function* () {
       const reader = yield* scriptedReader([
-        Effect.fail(new ZeropsTopologyUnavailable({ reason: "zcp studio topology exited 1" })),
+        Effect.fail(
+          new ZeropsCliFailed({ command: "zcp", reason: "zcp studio topology exited 1" }),
+        ),
       ]);
       const source = yield* makeZeropsRepositorySource({ enabled: true, read: reader.read });
 
@@ -179,7 +203,7 @@ describe("ZeropsRepositorySource", () => {
 
     return Effect.gen(function* () {
       const reader = yield* scriptedReader([
-        Effect.fail(new ZeropsTopologyUnavailable({ reason: "no credentials" })),
+        Effect.fail(new ZeropsCliFailed({ command: "zcp", reason: "no credentials" })),
       ]);
       const source = yield* makeZeropsRepositorySource({ enabled: true, read: reader.read });
 
@@ -198,8 +222,8 @@ describe("ZeropsRepositorySource", () => {
   it.effect("recovers on a later read after an unavailable one", () =>
     Effect.gen(function* () {
       const reader = yield* scriptedReader([
-        Effect.fail(new ZeropsTopologyUnavailable({ reason: "boot race" })),
-        Effect.succeed(topologyJson),
+        Effect.fail(new ZeropsCliFailed({ command: "zcp", reason: "boot race" })),
+        Effect.succeed(topology),
       ]);
       const source = yield* makeZeropsRepositorySource({ enabled: true, read: reader.read });
 

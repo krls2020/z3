@@ -27,16 +27,19 @@
  */
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+
 import { ServerConfig } from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import * as ZeropsCli from "./ZeropsCli.ts";
 import { isZeropsEnvironment } from "./ZeropsEnvironment.ts";
+import type { ZeropsTopologyRead } from "./zeropsTopologyParse.ts";
 
 /** Where zcp mounts every sibling service on the container. */
 export const ZEROPS_WORKSPACE_ROOT = "/var/www";
@@ -50,13 +53,6 @@ export const ZEROPS_REMOTE_REPOSITORY_PATH = "/var/www";
  * direct platform call, and a turn start refreshes explicitly anyway.
  */
 export const REPOSITORY_CACHE_TTL = Duration.seconds(30);
-
-/** How long the topology command may take before it counts as unavailable. */
-export const TOPOLOGY_READ_TIMEOUT = Duration.seconds(15);
-
-const TOPOLOGY_COMMAND = "zcp";
-const TOPOLOGY_ARGS = ["studio", "topology"] as const;
-const MAX_REASON_LENGTH = 200;
 
 /** One repository: a mounted dev service with its `.git` on its own disk. */
 export interface ZeropsRepository {
@@ -74,30 +70,21 @@ export type ZeropsRepositories =
   | { readonly _tag: "unavailable"; readonly reason: string }
   | { readonly _tag: "available"; readonly repositories: ReadonlyArray<ZeropsRepository> };
 
-/** The topology could not be read. Carries a reason fit to show a user. */
-export class ZeropsTopologyUnavailable extends Data.TaggedError("ZeropsTopologyUnavailable")<{
-  readonly reason: string;
-}> {}
-
-/** The one dependency the source has: something that produces topology JSON. */
-export type ZeropsTopologyReader = Effect.Effect<string, ZeropsTopologyUnavailable>;
+/**
+ * The one dependency the source has: a topology read.
+ *
+ * This is `ZeropsCli.readTopology` in production. The CLI seam owns running
+ * `zcp studio topology`, parsing it and telling "zcp is absent" apart from
+ * "the call failed"; this module owns only what that means for the repository
+ * set, so there is one implementation of the shell-out and one parser.
+ */
+export type ZeropsTopologyReader = Effect.Effect<ZeropsTopologyRead, ZeropsCli.ZeropsCliError>;
 
 export interface ZeropsRepositorySourceOptions {
   /** `isZeropsEnvironment(config)`, passed in so the rule has one home. */
   readonly enabled: boolean;
   readonly read: ZeropsTopologyReader;
 }
-
-const truncateReason = (value: string): string => {
-  const firstLine =
-    value
-      .split("\n")
-      .find((line) => line.trim().length > 0)
-      ?.trim() ?? "";
-  return firstLine.length > MAX_REASON_LENGTH
-    ? `${firstLine.slice(0, MAX_REASON_LENGTH)}…`
-    : firstLine;
-};
 
 /**
  * Turns `zcp studio topology` output into the repository set.
@@ -107,50 +94,25 @@ const truncateReason = (value: string): string => {
  * mounted right now" - and is not a managed service (`isInfrastructure`): a
  * postgres has no working tree to check point.
  */
-export const selectRepositories = (topologyJson: string): ZeropsRepositories => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(topologyJson);
-  } catch (error) {
-    return {
-      _tag: "unavailable",
-      reason: `zcp studio topology did not return JSON: ${truncateReason(String(error))}`,
-    };
-  }
-
-  if (typeof parsed !== "object" || parsed === null || !("services" in parsed)) {
-    return { _tag: "unavailable", reason: "zcp studio topology returned no services field" };
-  }
-
-  const services = (parsed as { readonly services: unknown }).services;
-  if (!Array.isArray(services)) {
-    return {
-      _tag: "unavailable",
-      reason: "zcp studio topology returned a non-list services field",
-    };
-  }
-
+export const selectRepositories = (topology: ZeropsTopologyRead): ZeropsRepositories => {
   const repositories: Array<ZeropsRepository> = [];
-  for (const service of services) {
-    if (typeof service !== "object" || service === null) {
+  for (const service of topology.services) {
+    // `mounted`/`mountPath` are zcp's own answer — it stats `/var/www/<host>`
+    // before emitting them — so this means "really mounted right now" rather
+    // than "ought to be". A managed service has no working tree to check point.
+    if (service.isManagedService || !service.mounted) {
       continue;
     }
-    const entry = service as {
-      readonly hostname?: unknown;
-      readonly mountPath?: unknown;
-      readonly isInfrastructure?: unknown;
-    };
-    if (entry.isInfrastructure === true) {
+    const mountPath = service.mountPath?.trim() ?? "";
+    if (service.hostname.length === 0 || mountPath.length === 0) {
       continue;
     }
-    const host = typeof entry.hostname === "string" ? entry.hostname.trim() : "";
-    const mountPath = typeof entry.mountPath === "string" ? entry.mountPath.trim() : "";
-    if (host.length === 0 || mountPath.length === 0) {
-      continue;
-    }
-    repositories.push({ host, mountPath, remotePath: ZEROPS_REMOTE_REPOSITORY_PATH });
+    repositories.push({
+      host: service.hostname,
+      mountPath,
+      remotePath: ZEROPS_REMOTE_REPOSITORY_PATH,
+    });
   }
-
   return { _tag: "available", repositories };
 };
 
@@ -182,8 +144,8 @@ export const makeZeropsRepositorySource = Effect.fn("ZeropsRepositorySource.make
   const read = Effect.gen(function* () {
     const outcome = yield* options.read.pipe(
       Effect.map(selectRepositories),
-      Effect.catchTag("ZeropsTopologyUnavailable", (error) =>
-        Effect.succeed<ZeropsRepositories>({ _tag: "unavailable", reason: error.reason }),
+      Effect.catch((error) =>
+        Effect.succeed<ZeropsRepositories>({ _tag: "unavailable", reason: error.message }),
       ),
     );
 
@@ -226,52 +188,6 @@ export class ZeropsRepositorySource extends Context.Service<
 >()("t3/zerops/ZeropsRepositorySource") {}
 
 /**
- * Runs `zcp studio topology` in the server's own working directory.
- *
- * The command is credential-blind by design: it reads them from the process
- * environment zcp itself set up, which is why it has to run inside the z3
- * unit rather than through a login shell.
- */
-export const topologyReader = (
-  runner: ProcessRunner.ProcessRunner["Service"],
-  cwd: string,
-): ZeropsTopologyReader =>
-  runner
-    .run({
-      command: TOPOLOGY_COMMAND,
-      args: [...TOPOLOGY_ARGS],
-      cwd,
-      timeout: TOPOLOGY_READ_TIMEOUT,
-      timeoutBehavior: "timedOutResult",
-    })
-    .pipe(
-      Effect.mapError(
-        (error) =>
-          new ZeropsTopologyUnavailable({
-            reason: `zcp studio topology failed: ${truncateReason(error.message)}`,
-          }),
-      ),
-      Effect.flatMap((result) => {
-        if (result.timedOut) {
-          return Effect.fail(
-            new ZeropsTopologyUnavailable({
-              reason: `zcp studio topology timed out after ${Duration.toSeconds(TOPOLOGY_READ_TIMEOUT)}s`,
-            }),
-          );
-        }
-        if (result.code !== 0) {
-          const detail = truncateReason(result.stderr);
-          return Effect.fail(
-            new ZeropsTopologyUnavailable({
-              reason: `zcp studio topology exited ${result.code}${detail.length > 0 ? `: ${detail}` : ""}`,
-            }),
-          );
-        }
-        return Effect.succeed(result.stdout);
-      }),
-    );
-
-/**
  * The live source.
  *
  * It takes `ChildProcessSpawner` directly and builds its own runner rather
@@ -286,9 +202,30 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* ServerConfig;
     const enabled = isZeropsEnvironment(config);
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    // The CLI is built here rather than taken from the context on purpose. Its
+    // own layer provides the `ProcessRunner` TAG, and this source sits below
+    // the git spawner in the graph; a memoised runner bound to the raw spawner
+    // could then reach `RepositoryIdentityResolver`, which runs git through
+    // that same tag - and git would be back on the mount. Building the runner
+    // locally keeps the shared graph untouched while still leaving one
+    // implementation of the shell-out and one parser.
+    const cli = yield* ZeropsCli.make({
+      command: "zcp",
+      baseArgs: [],
+      cwd: config.cwd,
+    }).pipe(
+      Effect.provideService(
+        ProcessRunner.ProcessRunner,
+        yield* ProcessRunner.make().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        ),
+      ),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
     const read = enabled
-      ? topologyReader(yield* ProcessRunner.make(), config.cwd)
-      : Effect.fail(new ZeropsTopologyUnavailable({ reason: "not a Zerops environment" }));
+      ? cli.readTopology
+      : Effect.fail(new ZeropsCli.ZeropsCliNotFound({ command: "zcp" }));
     return ZeropsRepositorySource.of(yield* makeZeropsRepositorySource({ enabled, read }));
   }),
 );
