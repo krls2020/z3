@@ -53,6 +53,22 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     devAllowedOrigins: [],
   } as const;
 
+  const noFlags = {
+    mode: Option.none(),
+    port: Option.none(),
+    host: Option.none(),
+    basePath: Option.none(),
+    baseDir: Option.none(),
+    cwd: Option.none(),
+    devUrl: Option.none(),
+    noBrowser: Option.none(),
+    bootstrapFd: Option.none(),
+    autoBootstrapProjectFromCwd: Option.none(),
+    logWebSocketEvents: Option.none(),
+    tailscaleServeEnabled: Option.none(),
+    tailscaleServePort: Option.none(),
+  } as const;
+
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
     const fs = yield* FileSystem.FileSystem;
     const filePath = yield* fs.makeTempFileScoped({ prefix: "t3-bootstrap-", suffix: ".ndjson" });
@@ -77,6 +93,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.none(),
           port: Option.none(),
           host: Option.none(),
+          basePath: Option.none(),
           baseDir: Option.none(),
           cwd: Option.none(),
           devUrl: Option.none(),
@@ -122,6 +139,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         baseDir,
         ...derivedPaths,
         host: "0.0.0.0",
+        basePath: "",
         staticDir: undefined,
         devUrl: new URL("http://127.0.0.1:5173"),
         devAllowedOrigins: ["https://host.example.ts.net", "https://phone.example.ts.net"],
@@ -150,6 +168,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.some("web"),
           port: Option.some(8788),
           host: Option.some("127.0.0.1"),
+          basePath: Option.none(),
           baseDir: Option.some(baseDir),
           cwd: Option.none(),
           devUrl: Option.some(new URL("http://127.0.0.1:4173")),
@@ -193,6 +212,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
+        basePath: "",
         staticDir: undefined,
         devUrl: new URL("http://127.0.0.1:4173"),
         noBrowser: true,
@@ -228,6 +248,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.some("web"),
           port: Option.some(8788),
           host: Option.some("127.0.0.1"),
+          basePath: Option.none(),
           baseDir: Option.some(baseDir),
           cwd: Option.none(),
           devUrl: Option.some(new URL("http://127.0.0.1:4173")),
@@ -266,6 +287,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
+        basePath: "",
         staticDir: undefined,
         devUrl: new URL("http://127.0.0.1:4173"),
         noBrowser: false,
@@ -305,6 +327,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.none(),
           port: Option.none(),
           host: Option.none(),
+          basePath: Option.none(),
           baseDir: Option.none(),
           cwd: Option.none(),
           devUrl: Option.none(),
@@ -342,6 +365,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         baseDir,
         ...derivedPaths,
         host: "127.0.0.2",
+        basePath: "",
         staticDir: resolved.staticDir,
         devUrl: undefined,
         noBrowser: true,
@@ -373,6 +397,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.some("desktop"),
           port: Option.some(4888),
           host: Option.none(),
+          basePath: Option.none(),
           baseDir: Option.some(baseDir),
           cwd: Option.some(customCwd),
           devUrl: Option.some(new URL("http://127.0.0.1:5173")),
@@ -435,6 +460,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.none(),
           port: Option.some(8788),
           host: Option.some("127.0.0.1"),
+          basePath: Option.none(),
           baseDir: Option.none(),
           cwd: Option.none(),
           devUrl: Option.some(new URL("http://127.0.0.1:4173")),
@@ -475,6 +501,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
+        basePath: "",
         staticDir: undefined,
         devUrl: new URL("http://127.0.0.1:4173"),
         noBrowser: true,
@@ -511,6 +538,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.some("desktop"),
           port: Option.some(4888),
           host: Option.none(),
+          basePath: Option.none(),
           baseDir: Option.some(baseDir),
           cwd: Option.none(),
           devUrl: Option.none(),
@@ -544,6 +572,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         baseDir,
         ...derivedPaths,
         host: "127.0.0.1",
+        basePath: "",
         staticDir: resolved.staticDir,
         devUrl: undefined,
         noBrowser: true,
@@ -554,6 +583,56 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         tailscaleServeEnabled: false,
         tailscaleServePort: 443,
       });
+    }),
+  );
+
+  it.effect("normalizes the base path from the flag, then the environment", () =>
+    Effect.gen(function* () {
+      const fromFlag = yield* resolveServerConfig(
+        { ...noFlags, basePath: Option.some("z3/") },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            NetService.layer,
+          ),
+        ),
+      );
+      expect(fromFlag.basePath).toBe("/z3");
+
+      const fromEnv = yield* resolveServerConfig({ ...noFlags }, Option.none()).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_BASE_PATH: "/z3/" } })),
+            NetService.layer,
+          ),
+        ),
+      );
+      expect(fromEnv.basePath).toBe("/z3");
+
+      const flagWins = yield* resolveServerConfig(
+        { ...noFlags, basePath: Option.some("/flag") },
+        Option.none(),
+      ).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: { T3CODE_BASE_PATH: "/env" } })),
+            NetService.layer,
+          ),
+        ),
+      );
+      expect(flagWins.basePath).toBe("/flag");
+
+      const unset = yield* resolveServerConfig({ ...noFlags }, Option.none()).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            NetService.layer,
+          ),
+        ),
+      );
+      expect(unset.basePath).toBe("");
     }),
   );
 
@@ -568,6 +647,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           mode: Option.some("web"),
           port: Option.some(3773),
           host: Option.none(),
+          basePath: Option.none(),
           baseDir: Option.some(baseDir),
           cwd: Option.none(),
           devUrl: Option.none(),
@@ -607,6 +687,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         baseDir,
         ...derivedPaths,
         host: undefined,
+        basePath: "",
         staticDir: resolved.staticDir,
         devUrl: undefined,
         noBrowser: true,

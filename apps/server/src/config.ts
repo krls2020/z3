@@ -72,6 +72,13 @@ export class ServerConfig extends Context.Service<
     readonly mode: RuntimeMode;
     readonly port: number;
     readonly host: string | undefined;
+    /**
+     * The public path prefix this server is published under, in normal form
+     * (`""` at an origin root, otherwise `/z3`). Routes stay mounted at the
+     * root — the recommended proxy strips the prefix — so this is what the
+     * server needs to emit correct absolute URLs and to advertise itself.
+     */
+    readonly basePath: string;
     readonly cwd: string;
     readonly baseDir: string;
     readonly staticDir: string | undefined;
@@ -200,6 +207,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     baseDir,
     ...derivedPaths,
     mode: "web",
+    basePath: "",
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
     tailscaleServeEnabled: false,

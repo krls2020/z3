@@ -1,9 +1,12 @@
+import { withBasePath } from "@t3tools/shared/basePath";
+
 import { buildHostedPairingUrl } from "../../hostedPairing";
 import { setPairingTokenOnUrl } from "../../pairingUrl";
 
 export function resolveDesktopPairingUrl(endpointUrl: string, credential: string): string {
-  const url = new URL(endpointUrl);
-  url.pathname = "/pair";
+  // The pair route hangs off the prefix the endpoint is served under, not off
+  // the origin root it may share with something else.
+  const url = new URL(withBasePath(endpointUrl, "/pair"));
   return setPairingTokenOnUrl(url, credential).toString();
 }
 

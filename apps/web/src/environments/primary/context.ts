@@ -4,13 +4,41 @@ import {
   type KnownEnvironment,
 } from "@t3tools/client-runtime/environment";
 import type { ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import { normalizeBasePath } from "@t3tools/shared/basePath";
 import * as Effect from "effect/Effect";
+
+import { appBasePath } from "../../basePath.ts";
 
 import { PrimaryEnvironmentRequestError, retryTransientBootstrap } from "./auth";
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 
 import { runPrimaryHttp } from "../../lib/runtime";
 import { readPrimaryEnvironmentTarget } from "./target";
+
+/**
+ * The bundle is talking to a server published under a different path prefix
+ * than the one it was built for.
+ *
+ * That mistake is otherwise invisible: the server answers, the descriptor
+ * decodes, and the client goes on to drive an environment nobody meant it to
+ * reach. The descriptor states the prefix so this can be caught at bootstrap.
+ */
+export class PrimaryEnvironmentBasePathMismatchError extends Error {
+  override readonly name = "PrimaryEnvironmentBasePathMismatchError";
+  constructor(
+    readonly clientBasePath: string,
+    readonly serverBasePath: string,
+  ) {
+    super(
+      `This client is served under ${clientBasePath || "/"} but the environment it reached is published under ${serverBasePath || "/"}.`,
+    );
+  }
+}
+
+export const isPrimaryEnvironmentBasePathMismatchError = (
+  error: unknown,
+): error is PrimaryEnvironmentBasePathMismatchError =>
+  error instanceof PrimaryEnvironmentBasePathMismatchError;
 
 let primaryEnvironmentDescriptor: ExecutionEnvironmentDescriptor | null = null;
 let primaryEnvironmentDescriptorPromise: Promise<ExecutionEnvironmentDescriptor> | null = null;
@@ -47,6 +75,15 @@ async function fetchPrimaryEnvironmentDescriptor(): Promise<ExecutionEnvironment
         operation: "fetch-environment-descriptor",
         cause: error,
       });
+    }
+
+    // Older servers state no prefix; only a stated one that disagrees is a fault.
+    if (descriptor.basePath !== undefined) {
+      const clientBasePath = appBasePath();
+      const serverBasePath = normalizeBasePath(descriptor.basePath);
+      if (serverBasePath !== clientBasePath) {
+        throw new PrimaryEnvironmentBasePathMismatchError(clientBasePath, serverBasePath);
+      }
     }
 
     writePrimaryEnvironmentDescriptor(descriptor);

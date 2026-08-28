@@ -183,6 +183,76 @@ describe("environmentBootstrap", () => {
     );
   });
 
+  // The hosted bundle is served under the same path prefix as the server it
+  // talks to (Zerops: <origin>/z3/ beside code-server), so window.location.origin
+  // alone names an origin root that answers with somebody else's shell.
+  it("takes the window-origin target from the prefix the bundle is served under", async () => {
+    vi.stubEnv("BASE_URL", "/z3/");
+    installTestBrowser("https://container.example.test/z3/thread/42");
+    await installDescriptorApi();
+
+    expect(readPrimaryEnvironmentTarget()).toEqual({
+      source: "window-origin",
+      target: {
+        httpBaseUrl: "https://container.example.test/z3/",
+        wsBaseUrl: "wss://container.example.test/z3/",
+      },
+    });
+    expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
+      "https://container.example.test/z3/.well-known/t3/environment",
+    );
+  });
+
+  // A bundle built for one prefix, pointed at a server published under another,
+  // reaches a server that answers — so nothing errors and the client silently
+  // drives the wrong environment. The descriptor states the prefix; the client
+  // checks it.
+  it("rejects a descriptor from a server published under a different prefix", async () => {
+    vi.stubEnv("BASE_URL", "/z3/");
+    installTestBrowser("https://container.example.test/z3/");
+    await installEnvironmentHttpTest({
+      descriptor: () => Effect.succeed({ ...BASE_ENVIRONMENT, basePath: "/other" }),
+    }).then((api) => {
+      disposeHttpTest = api.dispose;
+    });
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).rejects.toThrow(/\/other/);
+  });
+
+  it("accepts a descriptor whose advertised prefix matches the bundle's", async () => {
+    vi.stubEnv("BASE_URL", "/z3/");
+    installTestBrowser("https://container.example.test/z3/");
+    await installEnvironmentHttpTest({
+      descriptor: () => Effect.succeed({ ...BASE_ENVIRONMENT, basePath: "/z3" }),
+    }).then((api) => {
+      disposeHttpTest = api.dispose;
+    });
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toMatchObject({
+      basePath: "/z3",
+    });
+  });
+
+  it("accepts a descriptor from a server that does not state a prefix", async () => {
+    vi.stubEnv("BASE_URL", "/z3/");
+    installTestBrowser("https://container.example.test/z3/");
+    await installDescriptorApi();
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
+  });
+
+  it("joins routes onto the prefix of a configured target instead of replacing its path", () => {
+    vi.stubEnv("VITE_HTTP_URL", "https://remote.example.com/z3/");
+
+    expect(readPrimaryEnvironmentTarget().target).toEqual({
+      httpBaseUrl: "https://remote.example.com/z3/",
+      wsBaseUrl: "wss://remote.example.com/z3/",
+    });
+    expect(resolvePrimaryEnvironmentHttpUrl("/api/auth/session")).toBe(
+      "https://remote.example.com/z3/api/auth/session",
+    );
+  });
+
   it("uses the vite proxy for desktop-managed loopback descriptor requests during local dev", async () => {
     vi.stubEnv("VITE_DEV_SERVER_URL", "http://127.0.0.1:5733");
     vi.stubGlobal("window", {

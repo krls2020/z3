@@ -1,5 +1,7 @@
 export {
   getPrimaryKnownEnvironment,
+  isPrimaryEnvironmentBasePathMismatchError,
+  PrimaryEnvironmentBasePathMismatchError,
   readPrimaryEnvironmentDescriptor,
   resetPrimaryEnvironmentDescriptorForTests,
   resolveInitialPrimaryEnvironmentDescriptor,

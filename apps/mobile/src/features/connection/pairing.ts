@@ -1,5 +1,6 @@
 import { readHostedPairingRequest } from "@t3tools/shared/remote";
 import * as Schema from "effect/Schema";
+import { normalizeBasePath } from "@t3tools/shared/basePath";
 
 const MOBILE_PAIRING_URL_PARAM = "pairingUrl";
 
@@ -63,7 +64,10 @@ export function parsePairingUrl(url: string): { host: string; code: string } {
 
     parsed.hash = "";
     parsed.search = "";
-    parsed.pathname = "/";
+    // Keep the prefix the environment is proxied under; only the pair route
+    // itself is stripped to leave the backend base.
+    const path = normalizeBasePath(parsed.pathname);
+    parsed.pathname = path.endsWith("/pair") ? path.slice(0, -"/pair".length) : path;
     return { host: parsed.toString().replace(/\/$/, ""), code };
   } catch {
     return { host: trimmed, code: "" };

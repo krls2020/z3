@@ -56,7 +56,10 @@ describe("fetchEnvironmentPullRequestDiff", () => {
       });
       expect(calls).toHaveLength(1);
       const [request, init] = calls[0]!;
-      expect(String(request)).toBe("https://environment.example.test/api/pull-requests/diff");
+      // The environment's base URL carries the prefix it is reverse-proxied
+      // under, so the contract route hangs off the prefix and the DPoP `htu`
+      // the auth headers are bound to names the same URL.
+      expect(String(request)).toBe("https://environment.example.test/base/api/pull-requests/diff");
       expect(init.method).toBe("POST");
       expect(init.credentials).toBe("include");
 

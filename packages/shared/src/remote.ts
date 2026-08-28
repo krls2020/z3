@@ -1,6 +1,9 @@
 import * as Schema from "effect/Schema";
 
+import { normalizeBasePath } from "./basePath.ts";
+
 const PAIRING_TOKEN_PARAM = "token";
+const PAIRING_ROUTE = "/pair";
 const HOSTED_PAIRING_HOST_PARAM = "host";
 const HOSTED_PAIRING_LABEL_PARAM = "label";
 const SUPPORTED_REMOTE_BACKEND_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
@@ -97,7 +100,9 @@ const normalizeRemoteBaseUrl = (
       protocol: url.protocol,
     });
   }
-  url.pathname = "/";
+  // A host may name a reverse-proxied prefix (`https://container/z3`), which is
+  // part of the backend's address rather than a stray path to discard.
+  url.pathname = `${normalizeBasePath(url.pathname)}/`;
   url.search = "";
   url.hash = "";
   return url;
@@ -110,7 +115,7 @@ const toHttpBaseUrl = (url: URL): string => {
   } else if (next.protocol === "wss:") {
     next.protocol = "https:";
   }
-  next.pathname = "/";
+  next.pathname = `${normalizeBasePath(next.pathname)}/`;
   next.search = "";
   next.hash = "";
   return next.toString();
@@ -123,10 +128,22 @@ const toWsBaseUrl = (url: URL): string => {
   } else if (next.protocol === "https:") {
     next.protocol = "wss:";
   }
-  next.pathname = "/";
+  next.pathname = `${normalizeBasePath(next.pathname)}/`;
   next.search = "";
   next.hash = "";
   return next.toString();
+};
+
+/**
+ * A direct pairing URL points at the client's `/pair` route, so the backend base
+ * is that URL with the route removed — which is the origin root at `/pair` and
+ * the proxy prefix at `/z3/pair`.
+ */
+const dropPairingRoute = (url: URL): URL => {
+  const next = new URL(url.toString());
+  const path = normalizeBasePath(next.pathname);
+  next.pathname = path.endsWith(PAIRING_ROUTE) ? path.slice(0, -PAIRING_ROUTE.length) : path;
+  return next;
 };
 
 export interface ResolvedRemotePairingTarget {
@@ -220,10 +237,11 @@ export const resolveRemotePairingTarget = (input: {
     if (!credential) {
       throw new RemotePairingTokenMissingError({ host: url.host });
     }
+    const backendUrl = dropPairingRoute(url);
     return {
       credential,
-      httpBaseUrl: toHttpBaseUrl(url),
-      wsBaseUrl: toWsBaseUrl(url),
+      httpBaseUrl: toHttpBaseUrl(backendUrl),
+      wsBaseUrl: toWsBaseUrl(backendUrl),
     };
   }
 

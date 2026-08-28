@@ -6,6 +6,7 @@ import {
   type ClientConnectionMethod,
   type AuthEnvironmentScope,
 } from "@t3tools/contracts";
+import { socketUrlFromWsBaseUrl } from "@t3tools/shared/basePath";
 import { encodeOAuthScope } from "@t3tools/shared/oauthScope";
 import * as Effect from "effect/Effect";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
@@ -236,10 +237,7 @@ export const resolveRemoteWebSocketConnectionUrl = Effect.fn(
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
   });
 
-  const url = new URL(input.wsBaseUrl);
-  if (url.pathname === "" || url.pathname === "/") {
-    url.pathname = "/ws";
-  }
+  const url = socketUrlFromWsBaseUrl(input.wsBaseUrl);
   url.searchParams.set("wsTicket", issued.ticket);
   appendClientConnectionParams(url, input.clientMetadata, input.connectionMethod);
   return url.toString();
@@ -262,10 +260,7 @@ export const resolveRemoteDpopWebSocketConnectionUrl = Effect.fn(
     dpopProof: input.dpopProof,
     ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
   });
-  const url = new URL(input.wsBaseUrl);
-  if (url.pathname === "" || url.pathname === "/") {
-    url.pathname = "/ws";
-  }
+  const url = socketUrlFromWsBaseUrl(input.wsBaseUrl);
   url.searchParams.set("wsTicket", issued.ticket);
   appendClientConnectionParams(url, input.clientMetadata, input.connectionMethod);
   return url.toString();
