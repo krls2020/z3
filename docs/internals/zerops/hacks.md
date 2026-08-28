@@ -383,3 +383,39 @@ create it right after a successful pair, so connecting ends in a thread rather t
 environment.
 
 ---
+
+---
+
+### H-23 · Dev builds are delivered by hand and a container restart wipes them · in place
+
+**Where** the dev loop — `../zcp/eval/scripts/z3-dev-push.sh [zcp|z3|all]` (brief §4a in
+`../zcp/plans/z3-brief-2026-08-28.md`). Nothing is released while z3 is built: the zcp binary
+and the forked server (`cli.ts build` → `cli.ts pack` → `npm install` into
+`/home/zerops/.zcp/z3` on the container) go in over VPN + ssh. Target: project `z3-eval`
+(`nTV3oMB2SS634ImDJnQckg`), service `zcp` (`gt7tJZjDSk2zyH5XvNeAQQ`).
+**Why** a release is slow to iterate on and the pool hands a new zcp to fresh projects only after
+midnight; hand delivery means build → try → throw away within minutes.
+**Cost** the platform recipe runs `install.sh` (unpinned → latest _release_) on every container
+start, so any restart replaces the dev binary and `zcp init z3` with it — push again after every
+restart, and restart only to measure S0.2. The web client never goes in (`vite dev` on the
+laptop against the container), so `http://localhost:*` is on the z3 Origin/CORS allowlist.
+**Real fix** the release gate (brief §4a): one release, then the three "naked" acceptances —
+fresh `zcp@1` from the platform recipe answers `/healthz {z3Up:true}`, a restart of an older
+container brings z3 up, a brand-new pool account reaches a thread untouched.
+**First used** 2026-08-28 — zcp half verified on `z3-eval` (`zcp version` reports the local
+commit after the push, `zcp init` + `nginx -s reload` clean); z3 half see `verified.md`.
+
+---
+
+### H-24 · One subscription login copied into every test container · in place
+
+**Where** the dev targets — `z3-eval`'s zcp has Claude logged in through the owner's
+subscription; its credential artifacts (`~/.claude/.credentials.json`, `~/.claude.json`) are
+stashed on the laptop outside every repo and copied into each further throwaway service.
+**Why** API keys are not a product path (subscription login is the point of the T3 fork), and
+the in-container login flow is S7, phase 2 — until it exists, tests still need an authorized
+agent.
+**Cost** one identity in N containers; a token refresh in one container can invalidate the copy
+in another — re-stash from the one that still works. The contents never get printed or
+committed.
+**Real fix** S7 — OAuth inside z3's own terminal, credential-file watch, `zcp agent mark-oauth`.
