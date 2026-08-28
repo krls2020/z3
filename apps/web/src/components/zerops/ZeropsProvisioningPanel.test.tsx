@@ -103,4 +103,30 @@ describe("ZeropsProvisioningPanel", () => {
     expect(markup).toContain("Network error contacting Zerops.");
     expect(markup).toContain("Waiting for Zerops Code to answer");
   });
+
+  it("offers the restart when the health wait runs out on a known container", () => {
+    // A container that never answers is either from before Zerops Code or
+    // away; both are addressed by the same restart, and the alternative is a
+    // panel that can only ever say "keep waiting".
+    const expired = advanceProvisioning(
+      awaitingHealth,
+      { kind: "tick" },
+      1000 + PROVISIONING_CAPS["awaiting-health"] + 1,
+    );
+
+    const markup = render(expired);
+    expect(expired.phase).toBe("timed-out");
+    expect(markup).toContain("Keep waiting");
+    expect(markup).toContain("Enable Zerops Code");
+  });
+
+  it("does not offer a restart when it is the project that is late", () => {
+    const expired = advanceProvisioning(
+      awaitingContainer,
+      { kind: "tick" },
+      PROVISIONING_CAPS["awaiting-container"] + 1,
+    );
+
+    expect(render(expired)).not.toContain("Enable Zerops Code");
+  });
 });

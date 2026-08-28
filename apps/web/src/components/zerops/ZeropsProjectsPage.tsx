@@ -22,6 +22,7 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { zeropsCodeBaseUrl, type ZeropsCandidate } from "~/zerops/candidates";
 import { rememberZeropsEnvironment } from "~/zerops/firstPrompt";
 import { useZeropsCandidates } from "~/zerops/useZeropsCandidates";
+import { useZeropsCandidateHealth } from "~/zerops/useZeropsCandidateHealth";
 import { useZeropsProvisioning } from "~/zerops/useZeropsProvisioning";
 import { useZeropsSession, zeropsErrorMessage } from "~/zerops/ZeropsSessionProvider";
 
@@ -91,6 +92,7 @@ function NewProjectForm({
 function ZeropsProjectsContent() {
   const { status, client } = useZeropsSession();
   const { candidates, isLoading, error, refresh } = useZeropsCandidates();
+  const candidateHealth = useZeropsCandidateHealth(candidates);
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -124,6 +126,21 @@ function ZeropsProjectsContent() {
       await navigate({ to: "/" });
     },
     [client, connectZerops, navigate, provisioning],
+  );
+
+  const startWaitFor = useCallback(
+    (candidate: ZeropsCandidate) => {
+      if (!candidate.containerOrigin) return;
+      setConnectError(null);
+      connectingRef.current = null;
+      setCreatingIn(candidate.project.clientId ?? null);
+      provisioning.startForContainer({
+        projectId: candidate.project.id,
+        serviceId: candidate.service?.id ?? null,
+        containerOrigin: candidate.containerOrigin,
+      });
+    },
+    [provisioning],
   );
 
   const readyOrigin =
@@ -182,16 +199,22 @@ function ZeropsProjectsContent() {
         isLoading={isLoading}
         error={connectError ?? error}
         onRefresh={refresh}
-        onConnect={(candidate: ZeropsCandidate) => {
-          if (!candidate.containerOrigin) return;
+        health={candidateHealth}
+        onConnect={startWaitFor}
+        onEnable={(candidate: ZeropsCandidate) => {
+          const serviceId = candidate.service?.id;
+          if (!serviceId) return;
           setConnectError(null);
-          connectingRef.current = null;
-          setCreatingIn(candidate.project.clientId ?? null);
-          provisioning.startForContainer({
-            projectId: candidate.project.id,
-            serviceId: candidate.service?.id ?? null,
-            containerOrigin: candidate.containerOrigin,
-          });
+          // The restart is the whole of "enable": the container's install step
+          // re-runs on boot and comes back with the current zcp.
+          void client
+            .restartService(serviceId)
+            .then(() => {
+              startWaitFor(candidate);
+            })
+            .catch((cause: unknown) => {
+              setConnectError(zeropsErrorMessage(cause));
+            });
         }}
       />
       <NewProjectForm

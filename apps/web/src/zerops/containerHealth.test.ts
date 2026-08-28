@@ -138,4 +138,23 @@ describe("probeZeropsContainerHealth", () => {
 
     await expect(probeZeropsContainerHealth(`${ORIGIN}/`, spy.fetch)).resolves.toBe("ready");
   });
+
+  it("never reads a 5xx as a container that predates Zerops Code", async () => {
+    // The platform runs every initCommands entry to completion before any
+    // startCommands process starts, so nginx answering at all proves that
+    // boot's `zcp init` finished. A container mid-boot is the L7's 502, and
+    // offering a restart there would restart a container that is already
+    // coming up.
+    for (const status of [500, 502, 503, 504]) {
+      const both = stub({ [DESCRIPTOR]: () => html(status), [HEALTHZ]: () => html(status) });
+      await expect(probeZeropsContainerHealth(ORIGIN, both.fetch)).resolves.toBe("unreachable");
+
+      // Even mixed with a signal that would otherwise mean "old container".
+      const mixed = stub({ [DESCRIPTOR]: () => html(status), [HEALTHZ]: opaqueRedirect });
+      await expect(probeZeropsContainerHealth(ORIGIN, mixed.fetch)).resolves.toBe("unreachable");
+
+      const other = stub({ [DESCRIPTOR]: () => html(404), [HEALTHZ]: () => html(status) });
+      await expect(probeZeropsContainerHealth(ORIGIN, other.fetch)).resolves.toBe("unreachable");
+    }
+  });
 });

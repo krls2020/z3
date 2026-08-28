@@ -35,6 +35,14 @@ export function ZeropsProvisioningPanel({
   readonly onRetry: () => void;
   readonly onEnable: () => void;
 }) {
+  // A container that never answered is either from before Zerops Code or away;
+  // both are fixed by the same restart, so once the health wait has run out
+  // the panel offers it rather than only ever saying "keep waiting".
+  const canRestart =
+    state.phase === "timed-out" &&
+    state.expiredPhase === "awaiting-health" &&
+    state.containerServiceId !== null;
+
   const guiLink = (
     <Button
       size="sm"
@@ -60,11 +68,12 @@ export function ZeropsProvisioningPanel({
 
       {state.detail ? <p className="text-xs text-muted-foreground">{state.detail}</p> : null}
 
-      {state.phase === "needs-enable" ? (
+      {state.phase === "needs-enable" || canRestart ? (
         <div className="space-y-3">
           <p className="text-sm text-foreground">
-            This container was created before Zerops Code. Restarting it installs the current
-            version — your files, history and services are untouched.
+            {state.phase === "needs-enable"
+              ? "This container was created before Zerops Code. Restarting it installs the current version — your files, history and services are untouched."
+              : "This container has not answered. Restarting it installs the current version and brings it back — your files, history and services are untouched."}
           </p>
           <Button className="w-full" disabled={busy} onClick={onEnable}>
             {busy ? <Spinner className="size-4" /> : null}

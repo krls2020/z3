@@ -25,6 +25,13 @@
  * `/zcp-login` (measured on two live containers); and under a mis-prefixed
  * proxy the z3 SPA's catch-all turns any path into a valid `200 index.html`.
  * Parse first, then decide.
+ *
+ * One limit worth knowing, measured from a browser 2026-08-28: a container
+ * that predates Zerops Code sends no CORS headers on ANY route, so every read
+ * of it throws and it is indistinguishable here from a container that is
+ * simply away — both come back `unreachable`. The picker resolves that where
+ * it has more to go on: the platform has already said the service is ACTIVE,
+ * and a restart is the action that helps in either case.
  */
 
 import { zeropsCodeBaseUrl } from "./candidates";
@@ -38,22 +45,31 @@ type Reading =
   | { readonly kind: "not-json" }
   /** The cookie gate, or any redirect: this path is not served here. */
   | { readonly kind: "redirect" }
-  /** No usable answer — a 5xx, a dead container, or a cross-origin refusal. */
-  | { readonly kind: "unreachable" };
+  /**
+   * The container answered with a server error. Kept apart from `blocked`
+   * because it PROVES the container is coming up rather than old: the platform
+   * runs every `initCommands` entry to completion before any `startCommands`
+   * process starts, so a container mid-boot is the L7's 502 and nginx
+   * answering at all means that boot's `zcp init` already finished.
+   */
+  | { readonly kind: "server-error" }
+  /** No answer at all — a dead container, or a cross-origin refusal. */
+  | { readonly kind: "blocked" };
 
 async function read(url: string, fetchImpl: FetchLike): Promise<Reading> {
   let response: Response;
   try {
     response = await fetchImpl(url, { redirect: "manual" });
   } catch {
-    return { kind: "unreachable" };
+    return { kind: "blocked" };
   }
 
   // A browser reports a redirect it was told not to follow as an opaque
   // response with status 0; Node hands back the 3xx itself.
   if (response.type === "opaqueredirect") return { kind: "redirect" };
   if (response.status >= 300 && response.status < 400) return { kind: "redirect" };
-  if (response.status === 0 || response.status >= 500) return { kind: "unreachable" };
+  if (response.status >= 500) return { kind: "server-error" };
+  if (response.status === 0) return { kind: "blocked" };
   if (!(response.headers.get("content-type") ?? "").includes("application/json")) {
     return { kind: "not-json" };
   }
@@ -88,6 +104,14 @@ export async function probeZeropsContainerHealth(
   }
 
   const health = await read(`${base}/healthz`, fetchImpl);
+
+  // A server error anywhere means the container is on its way up, so it can
+  // never be read as an old container needing a restart — that would restart
+  // something that is already starting.
+  if (descriptor.kind === "server-error" || health.kind === "server-error") {
+    return "unreachable";
+  }
+
   if (health.kind === "json") {
     // zcp is new enough to serve `/healthz`, so a missing z3 is z3 still coming
     // up — never an old container, whatever `initComplete` says.
@@ -100,8 +124,8 @@ export async function probeZeropsContainerHealth(
     return "predates-z3";
   }
 
-  // `/healthz` could not be read at all. If the descriptor could not be read
-  // either, the container itself is away — mid-restart the platform balancer
-  // answers 502 for about fourteen seconds.
-  return descriptor.kind === "unreachable" ? "unreachable" : "predates-z3";
+  // `/healthz` gave no answer at all. If the descriptor gave none either, the
+  // container itself is away; otherwise nginx is answering something that is
+  // neither route, which is an older zcp.
+  return descriptor.kind === "blocked" ? "unreachable" : "predates-z3";
 }
