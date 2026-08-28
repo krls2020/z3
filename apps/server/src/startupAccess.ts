@@ -6,6 +6,7 @@ import { HttpServer } from "effect/unstable/http";
 
 import { ServerConfig } from "./config.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import { withBasePath } from "@t3tools/shared/basePath";
 
 export interface HeadlessServeAccessInfo {
   readonly connectionString: string;
@@ -90,8 +91,9 @@ export const resolveListeningPort = (address: unknown, fallbackPort: number): nu
 };
 
 export const buildPairingUrl = (connectionString: string, token: string): string => {
-  const url = new URL(connectionString);
-  url.pathname = "/pair";
+  // The connection string may carry the prefix the server is published under,
+  // and the pair route lives below it.
+  const url = new URL(withBasePath(connectionString, "/pair"));
   url.searchParams.delete("token");
   url.hash = new URLSearchParams([["token", token]]).toString();
   return url.toString();

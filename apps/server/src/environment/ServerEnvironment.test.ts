@@ -67,6 +67,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     devAllowedOrigins: [],
     noBrowser: false,
     startupPresentation: "browser",
+    basePath: "",
   } satisfies ServerConfig.ServerConfig["Service"];
 });
 
@@ -96,6 +97,43 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       expect(second.capabilities.threadTitleRegeneration).toBe(true);
       expect(second.capabilities.threadPullRequestLinking).toBe(true);
       expect(second.capabilities.agentActivityPublishing).toBe(false);
+    }),
+  );
+
+  // A client that loaded the app from the wrong prefix reaches a server that
+  // answers, so the descriptor has to say which prefix it is actually published
+  // under; the SPA catch-all makes the failure silent otherwise.
+  it.effect("advertises the base path the server is published under", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-environment-base-path-test-",
+      });
+      const config = yield* makeServerConfig(baseDir);
+
+      const rooted = yield* Effect.gen(function* () {
+        return yield* (yield* ServerEnvironment.ServerEnvironment).getDescriptor;
+      }).pipe(
+        Effect.provide(
+          ServerEnvironment.layer.pipe(
+            Layer.provide(ServerSecretStore.layer),
+            Layer.provide(ServerConfig.layer(config)),
+          ),
+        ),
+      );
+      expect(rooted.basePath).toBeUndefined();
+
+      const prefixed = yield* Effect.gen(function* () {
+        return yield* (yield* ServerEnvironment.ServerEnvironment).getDescriptor;
+      }).pipe(
+        Effect.provide(
+          ServerEnvironment.layer.pipe(
+            Layer.provide(ServerSecretStore.layer),
+            Layer.provide(ServerConfig.layer({ ...config, basePath: "/z3" })),
+          ),
+        ),
+      );
+      expect(prefixed.basePath).toBe("/z3");
     }),
   );
 

@@ -203,6 +203,44 @@ describe("environmentBootstrap", () => {
     );
   });
 
+  // A bundle built for one prefix, pointed at a server published under another,
+  // reaches a server that answers — so nothing errors and the client silently
+  // drives the wrong environment. The descriptor states the prefix; the client
+  // checks it.
+  it("rejects a descriptor from a server published under a different prefix", async () => {
+    vi.stubEnv("BASE_URL", "/z3/");
+    installTestBrowser("https://container.example.test/z3/");
+    await installEnvironmentHttpTest({
+      descriptor: () => Effect.succeed({ ...BASE_ENVIRONMENT, basePath: "/other" }),
+    }).then((api) => {
+      disposeHttpTest = api.dispose;
+    });
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).rejects.toThrow(/\/other/);
+  });
+
+  it("accepts a descriptor whose advertised prefix matches the bundle's", async () => {
+    vi.stubEnv("BASE_URL", "/z3/");
+    installTestBrowser("https://container.example.test/z3/");
+    await installEnvironmentHttpTest({
+      descriptor: () => Effect.succeed({ ...BASE_ENVIRONMENT, basePath: "/z3" }),
+    }).then((api) => {
+      disposeHttpTest = api.dispose;
+    });
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toMatchObject({
+      basePath: "/z3",
+    });
+  });
+
+  it("accepts a descriptor from a server that does not state a prefix", async () => {
+    vi.stubEnv("BASE_URL", "/z3/");
+    installTestBrowser("https://container.example.test/z3/");
+    await installDescriptorApi();
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
+  });
+
   it("joins routes onto the prefix of a configured target instead of replacing its path", () => {
     vi.stubEnv("VITE_HTTP_URL", "https://remote.example.com/z3/");
 

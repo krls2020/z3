@@ -25,6 +25,22 @@ it("formats issued pairing credentials with the secret and optional pair URL", (
   expect(output).toContain("https://example.com/pair#token=secret-pairing-token");
 });
 
+it("keeps the path prefix the public base URL carries", () => {
+  const output = formatIssuedPairingCredential(
+    {
+      id: "pairing-1",
+      credential: "secret-pairing-token",
+      subject: "one-time-token",
+      scopes: ["orchestration:read"],
+      createdAt: DateTime.makeUnsafe("2026-04-08T09:00:00.000Z"),
+      expiresAt: DateTime.makeUnsafe("2026-04-08T10:00:00.000Z"),
+    },
+    { baseUrl: "https://container.example.test/z3", json: false },
+  );
+
+  expect(output).toContain("https://container.example.test/z3/pair#token=secret-pairing-token");
+});
+
 it("formats pairing listings without exposing the secret token", () => {
   const output = formatPairingCredentialList(
     [

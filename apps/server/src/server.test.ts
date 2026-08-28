@@ -464,6 +464,7 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      basePath: "",
       ...options?.config,
     };
     const layerConfig = ServerConfig.layer(config);
@@ -1474,6 +1475,73 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({ config: { staticDir } });
 
       const response = yield* HttpClient.get("/");
+      assert.equal(response.status, 200);
+      assert.include(yield* response.text, "router-static-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The SPA catch-all answers 200 text/html for anything it does not recognise,
+  // which turns a misrouted API call into "the app loads and nothing works".
+  // Server routes never fall through to the shell.
+  it.effect("refuses to answer unmatched server routes with the SPA shell", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-router-shell-" });
+      yield* fileSystem.writeFileString(
+        path.join(staticDir, "index.html"),
+        "<html>router-static-ok</html>",
+      );
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      for (const route of ["/api/nope", "/oauth/nope", "/.well-known/nope", "/ws/nope"]) {
+        const response = yield* HttpClient.get(route);
+        assert.equal(response.status, 404, route);
+        assert.include(response.headers["content-type"], "application/json", route);
+      }
+
+      // An app route still gets the shell — that is what the catch-all is for.
+      const appRoute = yield* HttpClient.get("/thread/42");
+      assert.equal(appRoute.status, 200);
+      assert.include(yield* appRoute.text, "router-static-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The recommended proxy block strips the prefix. One written without its
+  // trailing slash forwards it instead, and every route then misses — so the
+  // server names that mistake rather than serving the shell over it.
+  it.effect("names a forwarded base path instead of answering with the shell", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-router-prefix-" });
+      yield* fileSystem.writeFileString(
+        path.join(staticDir, "index.html"),
+        "<html>router-static-ok</html>",
+      );
+      yield* buildAppUnderTest({ config: { staticDir, basePath: "/z3" } });
+
+      const response = yield* HttpClient.get("/z3/.well-known/t3/environment");
+      assert.equal(response.status, 404);
+      assert.include(response.headers["content-type"], "application/json");
+      assert.include(yield* response.text, "/z3");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("treats a prefix-shaped path as an app route when no prefix is configured", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-router-noprefix-",
+      });
+      yield* fileSystem.writeFileString(
+        path.join(staticDir, "index.html"),
+        "<html>router-static-ok</html>",
+      );
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      const response = yield* HttpClient.get("/z3/thread/42");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),

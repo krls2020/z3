@@ -58,6 +58,18 @@ it("builds a pairing URL that embeds the token in the hash", () => {
   );
 });
 
+// A container reached through a reverse proxy publishes the server under a path
+// prefix; the pair route hangs off it, not off the origin root that the prefix
+// shares with something else.
+it("builds a pairing URL below the prefix the connection string carries", () => {
+  expect(buildPairingUrl("https://container.example.test/z3", "PAIRCODE")).toBe(
+    "https://container.example.test/z3/pair#token=PAIRCODE",
+  );
+  expect(buildPairingUrl("https://container.example.test/z3/", "PAIRCODE")).toBe(
+    "https://container.example.test/z3/pair#token=PAIRCODE",
+  );
+});
+
 it("renders terminal QR codes as a multi-line unicode block grid", () => {
   const qrCode = renderTerminalQrCode("http://192.168.1.42:3773/pair#token=PAIRCODE");
 

@@ -326,6 +326,12 @@ export const attachmentUploadRouteLayer = HttpRouter.add(
   }),
 );
 
+const notFoundJson = (path: string, detail: string) =>
+  HttpServerResponse.jsonUnsafe({ error: "not_found", path, detail }, { status: 404 });
+
+const isUnderBasePath = (basePath: string, requestPath: string): boolean =>
+  requestPath === basePath || requestPath.startsWith(`${basePath}/`);
+
 export const staticAndDevRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -338,8 +344,23 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     }
 
     const config = yield* ServerConfig.ServerConfig;
-    if (config.devUrl && isDevProxiedPath(url.value.pathname)) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
+    const requestPath = url.value.pathname;
+
+    // The catch-all below answers every unrecognised path with the SPA shell,
+    // which is right for app routes and wrong for everything else: a misrouted
+    // API call would come back `200 text/html` and the app would load and do
+    // nothing. These two guards make that class of mistake say so.
+    if (isDevProxiedPath(requestPath)) {
+      return notFoundJson(
+        requestPath,
+        "No server route matches this path. Server routes are never answered with the client shell.",
+      );
+    }
+    if (config.basePath !== "" && isUnderBasePath(config.basePath, requestPath)) {
+      return notFoundJson(
+        requestPath,
+        `This server is published under ${config.basePath} and expects the reverse proxy to strip that prefix before forwarding (an nginx proxy_pass needs its trailing slash). The request still carried it.`,
+      );
     }
 
     if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
