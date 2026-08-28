@@ -267,6 +267,12 @@ export const ZeropsRecentTool = Schema.Struct({
   toolName: TrimmedNonEmptyString,
   status: ZeropsToolStatus,
   at: Schema.DateTimeUtc,
+  /**
+   * The runtime item this call belongs to. Lets a client link a strip entry to
+   * its row in the thread timeline, and is what turns a started-then-completed
+   * tool into one entry that changes status rather than two rows.
+   */
+  itemId: Schema.optional(Schema.String),
 });
 export type ZeropsRecentTool = typeof ZeropsRecentTool.Type;
 

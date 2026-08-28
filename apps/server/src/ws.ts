@@ -120,6 +120,7 @@ import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
 import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
@@ -554,6 +555,7 @@ const makeWsRpcLayer = (
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const zeropsTopology = yield* ZeropsTopology.ZeropsTopology;
+      const zeropsLifecycle = yield* ZeropsLifecycle.ZeropsLifecycle;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -1770,6 +1772,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.zeropsTopologyRefresh, zeropsTopology.refresh, {
             "rpc.aggregate": "zerops",
           }),
+        [WS_METHODS.zeropsLifecycleGet]: (input) =>
+          observeRpcEffect(WS_METHODS.zeropsLifecycleGet, zeropsLifecycle.get(input.threadId), {
+            "rpc.aggregate": "zerops",
+          }),
         [WS_METHODS.serverSignalProcess]: (input) =>
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
@@ -2501,6 +2507,16 @@ const makeWsRpcLayer = (
             WS_METHODS.subscribeZeropsTopology,
             Stream.unwrap(
               Effect.map(zeropsTopology.subscribe, ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "zerops" },
+          ),
+        [WS_METHODS.subscribeZeropsLifecycle]: (input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeZeropsLifecycle,
+            Stream.unwrap(
+              Effect.map(zeropsLifecycle.subscribe(input.threadId), ({ latest, changes }) =>
                 Stream.concat(Stream.make(latest), changes),
               ),
             ),
