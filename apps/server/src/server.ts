@@ -694,10 +694,12 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
       // Inside a Zerops container every git spawn above this line is rewritten
-      // into `ssh <service> git -C /var/www …`; everything else, this layer's
-      // own `zcp studio topology` call included, reaches the platform spawner
-      // below unchanged.
-      Layer.provideMerge(ZeropsGitSpawner.layer.pipe(Layer.provide(ZeropsRepositorySource.layer))),
+      // into `ssh <service> git -C /var/www …`; everything else, the repository
+      // source's own `zcp studio topology` call included, reaches the platform
+      // spawner below unchanged. The source is merged rather than buried in the
+      // spawner because the checkpoint reactor reads it too.
+      Layer.provideMerge(ZeropsGitSpawner.layer),
+      Layer.provideMerge(ZeropsRepositorySource.layer),
       Layer.provideMerge(PlatformServicesLive),
     );
   }),

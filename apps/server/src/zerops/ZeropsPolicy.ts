@@ -16,6 +16,11 @@
  * 3. **No automatic upstream refresh.** A status poll triggers a background
  *    `fetch` per remote, which on Zerops is unwanted network from N services
  *    at once against a PAT-backed origin z3 does not own.
+ * 4. **No destructive restore.** Upstream, reverting a checkpoint runs
+ *    `clean -fd` because the tree is a checkout on a laptop. On Zerops it is a
+ *    *running application's* disk: uploads, sqlite files and logs the live app
+ *    wrote after the checkpoint sit right there, and none of them are the
+ *    agent's to delete. Restore puts tracked files back and stops.
  *
  * Each rule is *enforced* rather than defaulted - at the decider for the
  * worktree state, server-side in `GitManager` for the other two - because a
@@ -43,6 +48,8 @@ export interface ZeropsPolicy {
   readonly stackedVcsActionsAllowed: boolean;
   /** May a status read fetch from the remote in the background? */
   readonly upstreamRefreshAllowed: boolean;
+  /** May restoring a checkpoint delete untracked files? */
+  readonly restoreRemovesUntrackedFiles: boolean;
 }
 
 /** Everywhere that is not a Zerops container: upstream behaviour, untouched. */
@@ -50,6 +57,7 @@ export const UPSTREAM_POLICY: ZeropsPolicy = {
   worktreesAllowed: true,
   stackedVcsActionsAllowed: true,
   upstreamRefreshAllowed: true,
+  restoreRemovesUntrackedFiles: true,
 };
 
 /** Inside a Zerops project container. */
@@ -57,6 +65,7 @@ export const ZEROPS_POLICY: ZeropsPolicy = {
   worktreesAllowed: false,
   stackedVcsActionsAllowed: false,
   upstreamRefreshAllowed: false,
+  restoreRemovesUntrackedFiles: false,
 };
 
 /** The policy in force for this server. */

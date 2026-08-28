@@ -33,6 +33,7 @@ import {
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import { zeropsPolicy } from "../zerops/ZeropsPolicy.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -813,11 +814,17 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         cwd: input.cwd,
         args: ["restore", "--source", commitOid, "--worktree", "--staged", "--", "."],
       });
-      yield* execute({
-        operation,
-        cwd: input.cwd,
-        args: ["clean", "-fd", "--", "."],
-      });
+      // On a laptop the tree is a checkout and deleting untracked files is
+      // part of "put it back". On Zerops it is a running application's disk -
+      // uploads, sqlite files and logs the live app wrote after the checkpoint
+      // sit right there, and none of them are ours to delete.
+      if ((yield* zeropsPolicy).restoreRemovesUntrackedFiles) {
+        yield* execute({
+          operation,
+          cwd: input.cwd,
+          args: ["clean", "-fd", "--", "."],
+        });
+      }
 
       const headExists = yield* hasHeadCommit(input.cwd);
       if (headExists) {

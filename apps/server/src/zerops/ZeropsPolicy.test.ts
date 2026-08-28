@@ -10,6 +10,7 @@ import { GitManagerError } from "@t3tools/contracts";
 import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -224,5 +225,54 @@ it.layer(NodeServices.layer)("GitManager under the Zerops policy", (it) => {
         );
       }
     }).pipe(Effect.provide(onZerops)),
+  );
+});
+
+/** A git executor that answers every command with a commit oid and records it. */
+const recordingVcsProcess = (recorded: Ref.Ref<ReadonlyArray<ReadonlyArray<string>>>) =>
+  Layer.succeed(VcsProcess.VcsProcess, {
+    run: (input: VcsProcess.VcsProcessInput) =>
+      Ref.update(recorded, (previous) => [...previous, input.args]).pipe(
+        Effect.as({
+          exitCode: 0,
+          stdout: "0123456789abcdef0123456789abcdef01234567\n",
+          stderr: "",
+          stdoutTruncated: false,
+          stderrTruncated: false,
+        }),
+      ),
+  } as never);
+
+const restoreArgs = (config: typeof onZerops) =>
+  Effect.gen(function* () {
+    const recorded = yield* Ref.make<ReadonlyArray<ReadonlyArray<string>>>([]);
+    const shape = yield* GitVcsDriver.makeVcsDriverShape().pipe(
+      Effect.provide(recordingVcsProcess(recorded)),
+    );
+    yield* shape.checkpoints.restoreCheckpoint({
+      cwd: "/var/www/kanbandev",
+      checkpointRef: "refs/t3/checkpoints/x/turn/1" as never,
+      fallbackToHead: false,
+    });
+    return yield* Ref.get(recorded);
+  }).pipe(Effect.provide(config));
+
+it.layer(NodeServices.layer)("restoring a checkpoint", (it) => {
+  it.effect("leaves what the running application wrote on Zerops", () =>
+    Effect.gen(function* () {
+      const args = yield* restoreArgs(onZerops);
+
+      assert.isTrue(args.some((argv) => argv[2] === "restore"));
+      assert.isFalse(args.some((argv) => argv[2] === "clean"));
+    }),
+  );
+
+  it.effect("still cleans untracked files everywhere else", () =>
+    Effect.gen(function* () {
+      const args = yield* restoreArgs(offZerops);
+
+      assert.isTrue(args.some((argv) => argv[2] === "restore"));
+      assert.isTrue(args.some((argv) => argv[2] === "clean" && argv[3] === "-fd"));
+    }),
   );
 });

@@ -21,7 +21,6 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
 
-import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
@@ -38,6 +37,16 @@ import type { OrchestrationDispatchError } from "../Errors.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as WorkspaceEntries from "../../workspace/WorkspaceEntries.ts";
+import * as VcsProcess from "../../vcs/VcsProcess.ts";
+import {
+  captureAcrossTargets,
+  captureBaselineAcrossTargets,
+  deleteRefsAcrossTargets,
+  resolveCheckpointTargets,
+  restoreAcrossTargets,
+  type CheckpointTarget,
+} from "../../zerops/ZeropsCheckpointTargets.ts";
+import { ZeropsRepositorySource } from "../../zerops/ZeropsRepositorySource.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -88,6 +97,23 @@ const make = Effect.gen(function* () {
   const receiptBus = yield* RuntimeReceiptBus;
   const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
+  const vcsProcess = yield* VcsProcess.VcsProcess;
+  // Optional on purpose: off Zerops nothing provides it, and every fan-out
+  // below then collapses to the single upstream target.
+  const repositorySource = yield* Effect.serviceOption(ZeropsRepositorySource);
+  const fanOut = { store: checkpointStore, vcsProcess, probed: new Set<string>() };
+
+  // Which repositories a checkpoint at this cwd covers. On Zerops the thread's
+  // cwd is the workspace root and the repositories are the dev services
+  // mounted inside it; everywhere else this is the one cwd it has always been.
+  const resolveTargets = Effect.fn("resolveCheckpointTargetsForCwd")(function* (
+    cwd: string,
+  ): Effect.fn.Return<ReadonlyArray<CheckpointTarget>> {
+    const repositories = Option.isNone(repositorySource)
+      ? ({ _tag: "disabled" } as const)
+      : yield* repositorySource.value.list;
+    return resolveCheckpointTargets(cwd, repositories);
+  });
 
   const appendRevertFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -209,7 +235,12 @@ const make = Effect.gen(function* () {
     if (!cwd) {
       return undefined;
     }
-    if (!isGitWorkspace(cwd)) {
+    // `/var/www` is not a repository itself, so the upstream check alone would
+    // skip every Zerops turn. A cwd that covers mounted repositories is
+    // checkpointable through them; one that covers none and is not a
+    // repository is the honest "no repositories yet".
+    const coversRepositories = (yield* resolveTargets(cwd)).some((target) => target.cwd !== cwd);
+    if (!coversRepositories && !isGitWorkspace(cwd)) {
       return undefined;
     }
     return cwd;
@@ -238,61 +269,57 @@ const make = Effect.gen(function* () {
     const fromCheckpointRef = checkpointRefForThreadTurn(input.threadId, fromTurnCount);
     const targetCheckpointRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
 
-    const fromCheckpointExists = yield* checkpointStore.hasCheckpointRef({
-      cwd: input.cwd,
-      checkpointRef: fromCheckpointRef,
+    // One capture per repository this cwd covers, concurrently, merged into the
+    // single flat file list the turn contract already carries. The same ref
+    // string names the turn in every repository, so nothing downstream changes.
+    const targets = yield* resolveTargets(input.cwd);
+    const capture = yield* captureAcrossTargets(fanOut, {
+      targets,
+      fromCheckpointRef,
+      toCheckpointRef: targetCheckpointRef,
     });
-    if (!fromCheckpointExists) {
+    const files = capture.files;
+
+    for (const cwd of capture.missingBaseline) {
       yield* Effect.logWarning("checkpoint capture missing pre-turn baseline", {
         threadId: input.threadId,
         turnId: input.turnId,
         fromTurnCount,
+        cwd,
       });
     }
-
-    yield* checkpointStore.captureCheckpoint({
-      cwd: input.cwd,
-      checkpointRef: targetCheckpointRef,
-    });
+    // The checkpoint is there, the summary is not - the upstream wording, now
+    // naming which repository it is about.
+    for (const unavailable of capture.diffUnavailable) {
+      yield* Effect.logWarning("failed to derive checkpoint file summary", {
+        threadId: input.threadId,
+        turnId: input.turnId,
+        turnCount: input.turnCount,
+        cwd: unavailable.cwd,
+        detail: unavailable.reason,
+      });
+      yield* appendCaptureFailureActivity({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        detail: `Checkpoint captured, but turn diff summary is unavailable: ${unavailable.reason}`,
+        createdAt: input.createdAt,
+      }).pipe(Effect.catch(() => Effect.void));
+    }
+    // A repository we could not check point is named, and the turn proceeds:
+    // capture is best-effort, and one repository's failure must not cost the
+    // others their history.
+    for (const skipped of capture.skipped) {
+      yield* appendCaptureFailureActivity({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        detail: `No checkpoint for ${skipped.cwd}: ${skipped.reason}`,
+        createdAt: input.createdAt,
+      }).pipe(Effect.catch(() => Effect.void));
+    }
 
     // Refresh the workspace entry index so the @-mention file picker
     // reflects files created or deleted during this turn.
     yield* workspaceEntries.refresh(input.cwd);
-
-    const files = yield* checkpointStore
-      .diffCheckpoints({
-        cwd: input.cwd,
-        fromCheckpointRef,
-        toCheckpointRef: targetCheckpointRef,
-        fallbackFromToHead: false,
-        ignoreWhitespace: false,
-      })
-      .pipe(
-        Effect.map((diff) =>
-          parseTurnDiffFilesFromUnifiedDiff(diff).map((file) => ({
-            path: file.path,
-            kind: "modified" as const,
-            additions: file.additions,
-            deletions: file.deletions,
-          })),
-        ),
-        Effect.tapError((error) =>
-          appendCaptureFailureActivity({
-            threadId: input.threadId,
-            turnId: input.turnId,
-            detail: `Checkpoint captured, but turn diff summary is unavailable: ${error.message}`,
-            createdAt: input.createdAt,
-          }),
-        ),
-        Effect.catch((error) =>
-          Effect.logWarning("failed to derive checkpoint file summary", {
-            threadId: input.threadId,
-            turnId: input.turnId,
-            turnCount: input.turnCount,
-            detail: error.message,
-          }).pipe(Effect.as([])),
-        ),
-      );
 
     const assistantMessageId =
       input.assistantMessageId ??
@@ -507,18 +534,14 @@ const make = Effect.gen(function* () {
         0,
       );
       const baselineCheckpointRef = checkpointRefForThreadTurn(thread.id, currentTurnCount);
-      const baselineExists = yield* checkpointStore.hasCheckpointRef({
-        cwd: checkpointCwd,
+      const baseline = yield* captureBaselineAcrossTargets(fanOut, {
+        targets: yield* resolveTargets(checkpointCwd),
         checkpointRef: baselineCheckpointRef,
       });
-      if (baselineExists) {
+      if (baseline.captured.length === 0) {
         return;
       }
 
-      yield* checkpointStore.captureCheckpoint({
-        cwd: checkpointCwd,
-        checkpointRef: baselineCheckpointRef,
-      });
       yield* receiptBus.publish({
         type: "checkpoint.baseline.captured",
         threadId: thread.id,
@@ -666,18 +689,14 @@ const make = Effect.gen(function* () {
       0,
     );
     const baselineCheckpointRef = checkpointRefForThreadTurn(threadId, currentTurnCount);
-    const baselineExists = yield* checkpointStore.hasCheckpointRef({
-      cwd: checkpointCwd,
+    const baseline = yield* captureBaselineAcrossTargets(fanOut, {
+      targets: yield* resolveTargets(checkpointCwd),
       checkpointRef: baselineCheckpointRef,
     });
-    if (baselineExists) {
+    if (baseline.captured.length === 0) {
       return;
     }
 
-    yield* checkpointStore.captureCheckpoint({
-      cwd: checkpointCwd,
-      checkpointRef: baselineCheckpointRef,
-    });
     yield* receiptBus.publish({
       type: "checkpoint.baseline.captured",
       threadId,
@@ -713,7 +732,11 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.catch(() => Effect.void));
       return;
     }
-    if (!isGitWorkspace(sessionRuntime.value.cwd)) {
+    const revertTargets = yield* resolveTargets(sessionRuntime.value.cwd);
+    const revertCoversRepositories = revertTargets.some(
+      (target) => target.cwd !== sessionRuntime.value.cwd,
+    );
+    if (!revertCoversRepositories && !isGitWorkspace(sessionRuntime.value.cwd)) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
@@ -755,12 +778,12 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const restored = yield* checkpointStore.restoreCheckpoint({
-      cwd: sessionRuntime.value.cwd,
+    const restore = yield* restoreAcrossTargets(checkpointStore, {
+      targets: revertTargets,
       checkpointRef: targetCheckpointRef,
       fallbackToHead: event.payload.turnCount === 0,
     });
-    if (!restored) {
+    if (restore.restored.length === 0) {
       yield* appendRevertFailureActivity({
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
@@ -768,6 +791,16 @@ const make = Effect.gen(function* () {
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;
+    }
+    // A repository the revert could not reach is named rather than swallowed:
+    // the others are already back, and the user must know which one is not.
+    for (const failure of restore.failed) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail: `Not reverted in ${failure.cwd}: ${failure.reason}`,
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
     }
 
     // Refresh the workspace entry index so the @-mention file picker
@@ -790,8 +823,8 @@ const make = Effect.gen(function* () {
     }
 
     if (staleCheckpointRefs.length > 0) {
-      yield* checkpointStore.deleteCheckpointRefs({
-        cwd: sessionRuntime.value.cwd,
+      yield* deleteRefsAcrossTargets(checkpointStore, {
+        targets: revertTargets,
         checkpointRefs: staleCheckpointRefs,
       });
     }
