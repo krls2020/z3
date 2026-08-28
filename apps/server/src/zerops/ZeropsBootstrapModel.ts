@@ -6,8 +6,8 @@
  * first boot. That holds on a laptop, where Codex is the CLI most users have
  * logged in. It does not hold in a Zerops container: the image ships several
  * agent CLIs and the one the user actually signed into is usually Claude Code,
- * so the landing thread greets them with "Codex is unauthenticated" and an
- * empty model picker - a dead end on the very first screen.
+ * so the very first screen greets them with "Codex is unauthenticated" and a
+ * thread that cannot take a turn until they change the model by hand.
  *
  * The rule here is deliberately a pure function over the provider snapshots
  * the registry already publishes, so it is decided by observable state
@@ -51,9 +51,10 @@ export const ZEROPS_BOOTSTRAP_DRIVER_PREFERENCE: ReadonlyArray<ProviderDriverKin
  * unauthenticated case (an unauthenticated CLI reports `error` +
  * `auth.status: "unauthenticated"` - see `CodexProvider`/`ClaudeProvider`).
  * The explicit auth clause covers a driver that reports ready while knowing it
- * has no session. A ready instance offering zero models is refused too:
- * selecting it would reproduce the empty-picker dead end this rule exists to
- * avoid.
+ * has no session. A ready instance listing zero models is refused too: with no
+ * live model list, `resolveBootstrapModelSlug` would have to fall back to a
+ * manifest slug the CLI has not confirmed it serves, and landing the thread on
+ * a guessed model is the failure this rule exists to prevent.
  */
 export const isBootstrapReadyProvider = (snapshot: ServerProvider): boolean =>
   snapshot.enabled &&
