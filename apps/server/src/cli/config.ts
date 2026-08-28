@@ -344,11 +344,16 @@ export const resolveServerConfig = (
     const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
     const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
     const resourceMonitorPath = bootstrap?.resourceMonitorPath;
+    // An explicit `--auto-bootstrap-project-from-cwd` is a decision taken for this
+    // one invocation, so it outranks the command's own default (`serve` opts out)
+    // and the headless presentation rule. Ambient env stays below both, which is
+    // what keeps a headless start from bootstrapping just because the variable is
+    // set somewhere in the environment.
     const autoBootstrapProjectFromCwd = Option.getOrElse(
       resolveOptionPrecedence(
+        normalizedFlags.autoBootstrapProjectFromCwd,
         Option.fromUndefinedOr(options?.forceAutoBootstrapProjectFromCwd),
         isHeadlessStartup ? Option.some(false) : Option.none(),
-        normalizedFlags.autoBootstrapProjectFromCwd,
         Option.fromUndefinedOr(env.autoBootstrapProjectFromCwd),
       ),
       () => mode === "web",

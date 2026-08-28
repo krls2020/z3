@@ -18,7 +18,7 @@ import {
 import * as NetService from "@t3tools/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
-import { resolveServerConfig } from "./config.ts";
+import { type CliServerFlags, resolveServerConfig } from "./config.ts";
 
 const deriveExplicitServerPaths = (baseDir: string, devUrl: URL | undefined) =>
   deriveServerPaths(baseDir, devUrl, { baseDirIsExplicit: true });
@@ -633,6 +633,41 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
         ),
       );
       expect(unset.basePath).toBe("");
+    }),
+  );
+
+  it.effect("honors an explicit auto-bootstrap flag over the serve command opt-out", () =>
+    Effect.gen(function* () {
+      const { join } = yield* Path.Path;
+      const baseDir = join(NodeOS.tmpdir(), "t3-cli-config-serve-autobootstrap-base");
+      const serveOptions = {
+        startupPresentation: "headless",
+        forceAutoBootstrapProjectFromCwd: false,
+      } as const;
+      const serveFlags: CliServerFlags = {
+        ...noFlags,
+        mode: Option.some("web"),
+        port: Option.some(3773),
+        baseDir: Option.some(baseDir),
+      };
+      const emptyEnv = Layer.mergeAll(
+        ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+        NetService.layer,
+      );
+
+      const withFlag = yield* resolveServerConfig(
+        { ...serveFlags, autoBootstrapProjectFromCwd: Option.some(true) },
+        Option.none(),
+        serveOptions,
+      ).pipe(Effect.provide(emptyEnv));
+      expect(withFlag.autoBootstrapProjectFromCwd).toBe(true);
+
+      const withoutFlag = yield* resolveServerConfig(
+        { ...serveFlags },
+        Option.none(),
+        serveOptions,
+      ).pipe(Effect.provide(emptyEnv));
+      expect(withoutFlag.autoBootstrapProjectFromCwd).toBe(false);
     }),
   );
 
