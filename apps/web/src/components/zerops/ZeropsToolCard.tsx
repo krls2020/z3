@@ -85,7 +85,16 @@ export function ZeropsToolCard({ payload }: { payload: ZeropsCardPayload }) {
     case "error":
       return (
         <CardFrame title={payload.code} tone="error">
-          <p className="mt-0.5 text-destructive-foreground text-xs">{payload.message}</p>
+          {/*
+            A real zcp error message is multi-line — zcli's own log output is
+            embedded in it (captured live: five log lines in one `error`).
+            Collapsing those newlines, which is what HTML does by default, runs
+            them into one unreadable sentence; and they can be long, so the
+            block scrolls rather than pushing the rest of the card off screen.
+          */}
+          <p className="mt-0.5 max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-destructive-foreground text-xs">
+            {payload.message}
+          </p>
           {payload.suggestion === undefined ? null : (
             <p className="mt-1 text-muted-foreground text-xs">{payload.suggestion}</p>
           )}
