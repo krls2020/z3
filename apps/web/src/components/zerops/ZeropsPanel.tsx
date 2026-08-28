@@ -8,8 +8,10 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { zeropsQuickActions } from "../../zerops/quickActions";
 import { buildZeropsServiceMap } from "../../zerops/serviceMap";
 import { useZeropsLifecycle, useZeropsTopology } from "../../zerops/useZeropsFeeds";
+import { ZeropsQuickActions } from "./ZeropsQuickActions";
 import { ZeropsServiceMap } from "./ZeropsServiceMap";
 
 export function ZeropsPanel({
@@ -29,7 +31,10 @@ export function ZeropsPanel({
         {view === undefined ? (
           <p className="text-muted-foreground text-sm">This environment is not a Zerops project.</p>
         ) : (
-          <ZeropsServiceMap view={view} />
+          <div className="space-y-4">
+            <ZeropsServiceMap view={view} />
+            <ZeropsQuickActions actions={zeropsQuickActions(topology)} />
+          </div>
         )}
       </div>
     </ScrollArea>
