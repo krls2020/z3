@@ -205,6 +205,7 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import { ExecError, ExecRunInput, ExecRunResult } from "./exec.ts";
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
@@ -248,6 +249,9 @@ export const WS_METHODS = {
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
   reviewGetDiffFileContents: "review.getDiffFileContents",
+
+  // Exec methods
+  execRun: "exec.run",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -351,6 +355,12 @@ export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybi
   payload: ServerRemoveKeybindingInput,
   success: ServerRemoveKeybindingResult,
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
+});
+
+export const WsExecRunRpc = Rpc.make(WS_METHODS.execRun, {
+  payload: ExecRunInput,
+  success: ExecRunResult,
+  error: Schema.Union([ExecError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
@@ -1058,6 +1068,7 @@ export const WsSubscribeZeropsLifecycleRpc = Rpc.make(WS_METHODS.subscribeZerops
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsExecRunRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
