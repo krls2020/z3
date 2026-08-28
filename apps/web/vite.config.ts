@@ -10,6 +10,7 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
+import { normalizeBasePath } from "@t3tools/shared/basePath";
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
@@ -25,6 +26,14 @@ Object.assign(process.env, repoEnv);
 // exact failure single-origin mode exists to prevent, and an invisible one
 // since the page still loads.
 const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
+
+// The bundle may be hosted under a path prefix rather than at an origin root:
+// Zerops serves the container's server at <origin>/z3/, beside code-server on
+// the same 8080 origin. Every asset reference is root-absolute, so without this
+// the shell loads under the prefix and every asset 404s (or worse, is answered
+// by whatever owns the origin root). Vite exposes the value as
+// `import.meta.env.BASE_URL`, which `src/basePath.ts` reads back at runtime.
+const base = `${normalizeBasePath(process.env.VITE_BASE_PATH)}/`;
 
 const port = Number(process.env.PORT ?? 5733);
 const explicitHost = process.env.HOST?.trim();
@@ -153,6 +162,7 @@ const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {
+    base,
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),

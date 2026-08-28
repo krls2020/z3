@@ -33,6 +33,7 @@ import type { SavedRemoteConnection } from "../../lib/connection";
 import * as MobilePreferences from "../../persistence/mobile-preferences";
 import * as MobileStorage from "../../persistence/mobile-storage";
 import { resolveCloudPublicConfig } from "./publicConfig";
+import { withBasePath } from "@t3tools/shared/basePath";
 
 const RELAY_STATUS_AND_CONNECT_SCOPES = [
   RelayEnvironmentStatusScope,
@@ -550,7 +551,9 @@ const connectRelayManagedEnvironment = Effect.fn("mobile.cloud.connectRelayManag
     const bootstrapDpop = yield* signer
       .createProof({
         method: "POST",
-        url: new URL("/oauth/token", connect.endpoint.httpBaseUrl).toString(),
+        // The proof's htu must name the URL the exchange actually reaches, which
+        // sits below the prefix the endpoint is served under.
+        url: withBasePath(connect.endpoint.httpBaseUrl, "/oauth/token"),
       })
       .pipe(Effect.mapError(cloudEnvironmentLinkError("Could not create bootstrap DPoP proof.")));
     const bootstrap = yield* exchangeRemoteDpopAccessToken({
