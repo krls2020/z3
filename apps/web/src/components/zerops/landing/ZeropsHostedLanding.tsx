@@ -4,6 +4,7 @@
  * stays reachable from here — a non-Zerops user is never locked out.
  */
 
+import { isZeropsCaptchaRejection } from "@t3tools/client-runtime/zerops";
 import { useState, type ReactNode } from "react";
 
 import { Spinner } from "../../ui/spinner";
@@ -14,6 +15,7 @@ import { ZeropsProjectsPage } from "../ZeropsProjectsPage";
 import {
   ZeropsLandingShell,
   ZeropsRegisterForm,
+  ZeropsRegistrationUnavailable,
   ZeropsSignInForm,
   ZeropsTotpForm,
 } from "./ZeropsLandingShell";
@@ -26,6 +28,9 @@ export function ZeropsHostedLanding({ manualFallback }: { readonly manualFallbac
   const [showManual, setShowManual] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the platform itself refuses the captcha, which is the same dead
+  // end as a widget that will not render on this origin.
+  const [captchaRefusal, setCaptchaRefusal] = useState<string | null>(null);
   const turnstile = useZeropsTurnstile();
 
   if (showManual) {
@@ -42,11 +47,21 @@ export function ZeropsHostedLanding({ manualFallback }: { readonly manualFallbac
     setError(null);
     void action()
       .catch((cause: unknown) => {
+        if (isZeropsCaptchaRejection(cause)) {
+          setCaptchaRefusal(zeropsErrorMessage(cause));
+          return;
+        }
         setError(zeropsErrorMessage(cause));
       })
       .finally(() => {
         setBusy(false);
       });
+  };
+
+  const showSignIn = () => {
+    setError(null);
+    setCaptchaRefusal(null);
+    setMode("sign-in");
   };
 
   const openManual = () => {
@@ -86,29 +101,33 @@ export function ZeropsHostedLanding({ manualFallback }: { readonly manualFallbac
   }
 
   if (mode === "register") {
+    // Either the widget refuses this origin or the platform refused its token;
+    // both mean signing up has to happen on Zerops' own page.
+    const unavailable =
+      captchaRefusal ?? (turnstile.state.status === "unavailable" ? turnstile.state.reason : null);
+
     return (
       <ZeropsLandingShell
         title="Create a Zerops account"
         description="Your agent runs inside your own Zerops project."
         onManualConnect={openManual}
       >
-        <ZeropsRegisterForm
-          busy={busy}
-          error={error}
-          captcha={turnstile.widget}
-          onSubmit={(input) => {
-            run(() =>
-              register({
-                ...input,
-                ...(turnstile.token ? { turnstileToken: turnstile.token } : {}),
-              }),
-            );
-          }}
-          onSwitchToSignIn={() => {
-            setError(null);
-            setMode("sign-in");
-          }}
-        />
+        {unavailable === null ? (
+          <ZeropsRegisterForm
+            busy={busy}
+            error={error}
+            captcha={turnstile.widget}
+            captchaPending={turnstile.state.status !== "ready"}
+            onSubmit={(input) => {
+              const token = turnstile.state.token;
+              if (token === null) return;
+              run(() => register({ ...input, turnstileToken: token }));
+            }}
+            onSwitchToSignIn={showSignIn}
+          />
+        ) : (
+          <ZeropsRegistrationUnavailable reason={unavailable} onSignIn={showSignIn} />
+        )}
       </ZeropsLandingShell>
     );
   }

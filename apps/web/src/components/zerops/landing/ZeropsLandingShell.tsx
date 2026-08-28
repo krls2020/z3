@@ -7,6 +7,7 @@
  * non-Zerops user must never be locked out of their own client.
  */
 
+import { ExternalLinkIcon } from "lucide-react";
 import type { FormEvent, ReactNode } from "react";
 
 import { Button } from "../../ui/button";
@@ -71,12 +72,71 @@ function FormError({ message }: { readonly message: string | null }) {
   );
 }
 
-function SubmitButton({ busy, label }: { readonly busy: boolean; readonly label: string }) {
+function SubmitButton({
+  busy,
+  label,
+  blocked = false,
+}: {
+  readonly busy: boolean;
+  readonly label: string;
+  readonly blocked?: boolean;
+}) {
   return (
-    <Button type="submit" className="w-full" disabled={busy}>
+    <Button type="submit" className="w-full" disabled={busy || blocked}>
       {busy ? <Spinner className="size-4" /> : null}
       {label}
     </Button>
+  );
+}
+
+/**
+ * Where a user can sign up when this origin cannot: the platform's own form,
+ * carrying the pool claim the same way our request does.
+ */
+export const ZEROPS_GUI_REGISTRATION_URL = "https://app.zerops.io/registration?zcp=true";
+
+/**
+ * Cloudflare Turnstile only renders on hostnames its site key allows, and the
+ * platform refuses a registration without a token — so on any other origin
+ * signing up here is impossible until Zerops allows the hostname. Rather than
+ * a dead form, the user gets the sign-up that does work and a way back.
+ */
+export function ZeropsRegistrationUnavailable({
+  reason,
+  onSignIn,
+}: {
+  readonly reason: string;
+  readonly onSignIn: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-foreground">
+        Creating an account is not available from this address yet.
+      </p>
+      <p className="text-xs text-muted-foreground">
+        The Zerops sign-up form protects itself with a captcha that only runs on Zerops&apos; own
+        pages. Reported reason: {reason}
+      </p>
+      <Button
+        className="w-full"
+        render={
+          <a href={ZEROPS_GUI_REGISTRATION_URL} target="_blank" rel="noreferrer">
+            <ExternalLinkIcon className="size-4" />
+            Sign up at app.zerops.io
+          </a>
+        }
+      />
+      <p className="text-center text-xs text-muted-foreground">
+        Done, or already have an account?{" "}
+        <button
+          type="button"
+          className="underline underline-offset-2 hover:text-foreground"
+          onClick={onSignIn}
+        >
+          Sign in here
+        </button>
+      </p>
+    </div>
   );
 }
 
@@ -141,13 +201,16 @@ export function ZeropsRegisterForm({
   busy,
   error,
   captcha,
+  captchaPending,
   onSubmit,
   onSwitchToSignIn,
 }: {
   readonly busy: boolean;
   readonly error: string | null;
-  /** Rendered only while the Turnstile flag is on; null keeps the field out entirely. */
+  /** The Turnstile widget. The platform enforces it, so it is always rendered. */
   readonly captcha: ReactNode | null;
+  /** True until the captcha hands over a token; submitting before then is refused. */
+  readonly captchaPending: boolean;
   readonly onSubmit: (input: {
     readonly email: string;
     readonly password: string;
@@ -199,7 +262,7 @@ export function ZeropsRegisterForm({
       </div>
       {captcha}
       <FormError message={error} />
-      <SubmitButton busy={busy} label="Create account" />
+      <SubmitButton busy={busy} blocked={captchaPending} label="Create account" />
       <p className="text-center text-xs text-muted-foreground">
         Already have one?{" "}
         <button

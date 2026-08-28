@@ -19,7 +19,11 @@ import {
   generateVscodePassword,
   nextZcpServiceName,
 } from "./newProject.ts";
-import { buildZeropsRegistrationBody, type ZeropsRegistrationInput } from "./registration.ts";
+import {
+  ZEROPS_CAPTCHA_ERROR_CODE,
+  buildZeropsRegistrationBody,
+  type ZeropsRegistrationInput,
+} from "./registration.ts";
 
 export const DEFAULT_ZEROPS_API_BASE = "https://api.app-prg1.zerops.io";
 
@@ -319,6 +323,17 @@ export class ZeropsApiClient {
 
   /** `POST /registration` — signs up and returns an immediately usable session. */
   async register(input: ZeropsRegistrationInput): Promise<ZeropsRegistrationResponse> {
+    if (!input.turnstileToken.trim()) {
+      // The platform refuses a registration without a captcha token, so there
+      // is nothing to gain by sending one — and the caller needs the same
+      // typed failure it would get from the server.
+      throw new ZeropsApiError(
+        "Cloudflare captcha verification failed. Please try again.",
+        "invalid-input",
+        400,
+        ZEROPS_CAPTCHA_ERROR_CODE,
+      );
+    }
     const response = await this.#request<ZeropsRegistrationResponse>(
       "/registration",
       { method: "POST", body: JSON.stringify(buildZeropsRegistrationBody(input)) },

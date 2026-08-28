@@ -1,13 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { DEFAULT_ZEROPS_API_BASE, ZeropsApiClient } from "./api.ts";
-import { buildZeropsRegistrationBody } from "./registration.ts";
+import { DEFAULT_ZEROPS_API_BASE, ZeropsApiClient, ZeropsApiError } from "./api.ts";
+import {
+  ZEROPS_CAPTCHA_ERROR_CODE,
+  buildZeropsRegistrationBody,
+  isZeropsCaptchaRejection,
+} from "./registration.ts";
 
 const INPUT = {
   email: "  someone@example.com ",
   password: " keeps spaces ",
   fullName: " Ada Lovelace ",
   organizationName: " Analytical Engines ",
+  turnstileToken: "cf-token",
 };
 
 describe("buildZeropsRegistrationBody", () => {
@@ -19,17 +24,14 @@ describe("buildZeropsRegistrationBody", () => {
       accountName: "Analytical Engines",
       languageId: "en",
       claimZcpPool: true,
+      token: "cf-token",
     });
   });
 
-  it("omits the captcha field entirely while the Turnstile flag is off", () => {
-    const body = buildZeropsRegistrationBody(INPUT);
-    expect("token" in body).toBe(false);
-  });
-
-  it("carries the Turnstile token when the flag is on", () => {
-    const body = buildZeropsRegistrationBody({ ...INPUT, turnstileToken: "cf-token" });
-    expect(body.token).toBe("cf-token");
+  it("always carries the captcha token — the platform enforces it", () => {
+    // Measured 2026-08-28: a complete body with no `token` is refused with
+    // `cloudflareCaptchaVerificationFailed`, so there is no captcha-less path.
+    expect(buildZeropsRegistrationBody(INPUT).token).toBe("cf-token");
   });
 
   it("can register without claiming, for a signup that is not pool-aware", () => {
@@ -100,5 +102,47 @@ describe("ZeropsApiClient.register", () => {
 
     expect(response.zcpClaimed).toBe(false);
     expect(client.session?.accessToken).toBe("access-1");
+  });
+});
+
+describe("isZeropsCaptchaRejection", () => {
+  it("recognises the platform's captcha refusal", () => {
+    // Live shape, 2026-08-28: a complete body with no Turnstile token is
+    // refused by the captcha layer, not by field validation.
+    expect(
+      isZeropsCaptchaRejection(
+        new ZeropsApiError(
+          "Cloudflare captcha verification failed. Please try again.",
+          "invalid-input",
+          400,
+          ZEROPS_CAPTCHA_ERROR_CODE,
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not mistake an ordinary validation failure for it", () => {
+    expect(
+      isZeropsCaptchaRejection(
+        new ZeropsApiError("field is required", "invalid-input", 400, "invalidUserInput"),
+      ),
+    ).toBe(false);
+    expect(isZeropsCaptchaRejection(new Error("boom"))).toBe(false);
+    expect(isZeropsCaptchaRejection(null)).toBe(false);
+  });
+
+  it("refuses to send a registration with no captcha token", async () => {
+    const client = new ZeropsApiClient({
+      fetch: () => {
+        throw new Error("no request may be made without a captcha token");
+      },
+    });
+
+    const error = await client
+      .register({ ...INPUT, turnstileToken: "" })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ZeropsApiError);
+    expect(isZeropsCaptchaRejection(error)).toBe(true);
   });
 });

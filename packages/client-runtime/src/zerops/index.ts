@@ -37,7 +37,9 @@ export {
 } from "./session.ts";
 
 export {
+  ZEROPS_CAPTCHA_ERROR_CODE,
   buildZeropsRegistrationBody,
+  isZeropsCaptchaRejection,
   type ZeropsRegistrationBody,
   type ZeropsRegistrationInput,
 } from "./registration.ts";
