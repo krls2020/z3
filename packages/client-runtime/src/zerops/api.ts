@@ -66,6 +66,7 @@ export interface ZeropsProject {
   readonly name: string;
   readonly status: string;
   readonly clientId?: string;
+  readonly created?: string;
   readonly publicZone?: string;
   readonly zeropsSubdomainHost?: string;
   readonly mode?: string;
