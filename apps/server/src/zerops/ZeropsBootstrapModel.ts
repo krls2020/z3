@@ -1,0 +1,115 @@
+/**
+ * ZeropsBootstrapModel - which provider the auto-bootstrapped first thread
+ * opens on inside a Zerops project container.
+ *
+ * Upstream hardcodes Codex for the thread the server creates from the CWD on
+ * first boot. That holds on a laptop, where Codex is the CLI most users have
+ * logged in. It does not hold in a Zerops container: the image ships several
+ * agent CLIs and the one the user actually signed into is usually Claude Code,
+ * so the landing thread greets them with "Codex is unauthenticated" and an
+ * empty model picker - a dead end on the very first screen.
+ *
+ * The rule here is deliberately a pure function over the provider snapshots
+ * the registry already publishes, so it is decided by observable state
+ * (`status` / `auth` / `models`) rather than by guessing from the environment.
+ * When nothing is ready it returns `undefined` and the caller keeps upstream's
+ * value - the thread still exists and shows that provider's own sign-in
+ * banner, which is a better landing than no thread at all.
+ *
+ * Scope: this module is only consulted inside a Zerops container
+ * (`isZeropsEnvironment`). Everywhere else the upstream default is returned
+ * byte-identical.
+ *
+ * @module ZeropsBootstrapModel
+ */
+import {
+  DEFAULT_MODEL,
+  DEFAULT_MODEL_BY_PROVIDER,
+  isProviderAvailable,
+  type ModelSelection,
+  ProviderDriverKind,
+  type ServerProvider,
+} from "@t3tools/contracts";
+
+/**
+ * Which driver the bootstrap thread prefers when more than one is ready.
+ *
+ * Claude first because it is the CLI a Zerops container is provisioned with a
+ * subscription for; Codex second so a container where the user logged Codex in
+ * instead lands where upstream would have put it. Any other ready driver is
+ * still eligible - it just does not get to jump the queue.
+ */
+export const ZEROPS_BOOTSTRAP_DRIVER_PREFERENCE: ReadonlyArray<ProviderDriverKind> = [
+  ProviderDriverKind.make("claudeAgent"),
+  ProviderDriverKind.make("codex"),
+];
+
+/**
+ * Can the bootstrap thread actually start a turn on this instance?
+ *
+ * `status === "ready"` is the driver's own verdict and already excludes the
+ * unauthenticated case (an unauthenticated CLI reports `error` +
+ * `auth.status: "unauthenticated"` - see `CodexProvider`/`ClaudeProvider`).
+ * The explicit auth clause covers a driver that reports ready while knowing it
+ * has no session. A ready instance offering zero models is refused too:
+ * selecting it would reproduce the empty-picker dead end this rule exists to
+ * avoid.
+ */
+export const isBootstrapReadyProvider = (snapshot: ServerProvider): boolean =>
+  snapshot.enabled &&
+  snapshot.installed &&
+  isProviderAvailable(snapshot) &&
+  snapshot.status === "ready" &&
+  snapshot.auth.status !== "unauthenticated" &&
+  snapshot.models.length > 0;
+
+/**
+ * The model the bootstrap thread opens on for one instance.
+ *
+ * The manifest default wins when the live snapshot actually offers it, so a
+ * Zerops container lands on the same model upstream would pick for that
+ * provider. Otherwise the snapshot decides - its own `isDefault` flag first,
+ * then whatever it lists first - because a slug the CLI does not serve is
+ * worse than a second-choice one it does.
+ */
+export const resolveBootstrapModelSlug = (snapshot: ServerProvider): string => {
+  const manifestDefault = DEFAULT_MODEL_BY_PROVIDER[snapshot.driver];
+  if (manifestDefault !== undefined && snapshot.models.some((m) => m.slug === manifestDefault)) {
+    return manifestDefault;
+  }
+  const flagged = snapshot.models.find((m) => m.isDefault === true);
+  if (flagged !== undefined) {
+    return flagged.slug;
+  }
+  return snapshot.models[0]?.slug ?? manifestDefault ?? DEFAULT_MODEL;
+};
+
+/**
+ * The instance the bootstrap thread opens on, or `undefined` when none of the
+ * configured instances can serve a turn.
+ */
+export const pickBootstrapProvider = (
+  providers: ReadonlyArray<ServerProvider>,
+): ServerProvider | undefined => {
+  const ready = providers.filter(isBootstrapReadyProvider);
+  for (const driver of ZEROPS_BOOTSTRAP_DRIVER_PREFERENCE) {
+    const preferred = ready.find((snapshot) => snapshot.driver === driver);
+    if (preferred !== undefined) {
+      return preferred;
+    }
+  }
+  return ready[0];
+};
+
+/**
+ * The bootstrap model selection for a Zerops container, or `undefined` when
+ * the caller should keep upstream's hardcoded default.
+ */
+export const resolveZeropsBootstrapModelSelection = (
+  providers: ReadonlyArray<ServerProvider>,
+): ModelSelection | undefined => {
+  const chosen = pickBootstrapProvider(providers);
+  return chosen === undefined
+    ? undefined
+    : { instanceId: chosen.instanceId, model: resolveBootstrapModelSlug(chosen) };
+};
