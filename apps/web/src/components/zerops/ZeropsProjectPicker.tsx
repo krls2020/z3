@@ -129,6 +129,7 @@ export function ZeropsProjectPicker({
   onConnect,
   onEnable,
   onOpen,
+  onWait,
 }: {
   readonly candidates: ReadonlyArray<ZeropsCandidate>;
   readonly isLoading: boolean;
@@ -139,6 +140,8 @@ export function ZeropsProjectPicker({
   readonly onConnect?: ((candidate: ZeropsCandidate) => void) | undefined;
   readonly onEnable?: ((candidate: ZeropsCandidate) => void) | undefined;
   readonly onOpen?: ((candidate: ZeropsCandidate) => void) | undefined;
+  /** A project or container that is still on its way in — nothing to connect to yet. */
+  readonly onWait?: ((candidate: ZeropsCandidate) => void) | undefined;
 }) {
   const grouped = groupZeropsCandidates(candidates);
   const empty = !isLoading && candidates.length === 0;
@@ -202,6 +205,26 @@ export function ZeropsProjectPicker({
             onConnect,
             onEnable,
           })
+        }
+      />
+      <CandidateGroup
+        title="Preparing"
+        description="Getting your project ready."
+        candidates={grouped.provisioning}
+        renderAction={
+          onWait
+            ? (candidate) => (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    onWait(candidate);
+                  }}
+                >
+                  Wait for it
+                </Button>
+              )
+            : undefined
         }
       />
       <CandidateGroup

@@ -79,7 +79,7 @@ describe("deriveZeropsCandidates", () => {
     expect(new Set(candidates.map((candidate) => candidate.key)).size).toBe(2);
   });
 
-  it("reports a project that is not active as unavailable, naming its status", () => {
+  it("reports a project still being created as provisioning, not unavailable", () => {
     const candidates = deriveZeropsCandidates(
       { ...PROJECT, status: "CREATING" },
       [service({ id: "s1" })],
@@ -87,8 +87,20 @@ describe("deriveZeropsCandidates", () => {
     );
 
     expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.group).toBe("provisioning");
+    expect(candidates[0]?.reason).toBe("project is being created");
+  });
+
+  it("reports a project in any other non-active status as unavailable, naming it", () => {
+    const candidates = deriveZeropsCandidates(
+      { ...PROJECT, status: "SUSPENDED" },
+      [service({ id: "s1" })],
+      NO_CONNECTIONS,
+    );
+
+    expect(candidates).toHaveLength(1);
     expect(candidates[0]?.group).toBe("unavailable");
-    expect(candidates[0]?.reason).toBe("project is CREATING");
+    expect(candidates[0]?.reason).toBe("project is SUSPENDED");
   });
 
   it("reports a container that is not active as unavailable, naming its status", () => {
@@ -102,6 +114,20 @@ describe("deriveZeropsCandidates", () => {
     expect(candidates[0]?.reason).toBe("container is STOPPED");
     // The service is still named, so the UI can offer to start it.
     expect(candidates[0]?.service?.id).toBe("s1");
+  });
+
+  it("reports a container that is starting as provisioning, naming its status", () => {
+    for (const status of ["NEW", "CREATING", "STARTING", "RESTARTING", "UPGRADING"]) {
+      const candidates = deriveZeropsCandidates(
+        PROJECT,
+        [service({ id: "s1", status })],
+        NO_CONNECTIONS,
+      );
+
+      expect(candidates[0]?.group).toBe("provisioning");
+      expect(candidates[0]?.reason).toBe(`container is starting (${status})`);
+      expect(candidates[0]?.service?.id).toBe("s1");
+    }
   });
 
   it("names the specific reason a container has no reachable origin", () => {
@@ -160,11 +186,17 @@ describe("groupZeropsCandidates", () => {
           service({ id: "s1" }),
           service({ id: "s2", name: "zcp2" }),
           service({ id: "s3", name: "zcp3", status: "STOPPED" }),
+          service({ id: "s4", name: "zcp4", status: "STARTING" }),
         ],
         connected,
       ),
       ...deriveZeropsCandidates(
         { ...PROJECT, id: "project-2", status: "STOPPED" },
+        null,
+        connected,
+      ),
+      ...deriveZeropsCandidates(
+        { ...PROJECT, id: "project-3", status: "CREATING" },
         null,
         connected,
       ),
@@ -174,6 +206,9 @@ describe("groupZeropsCandidates", () => {
 
     expect(grouped.connected.map((candidate) => candidate.service?.id)).toEqual(["s1"]);
     expect(grouped.ready.map((candidate) => candidate.service?.id)).toEqual(["s2"]);
+    expect(
+      grouped.provisioning.map((candidate) => candidate.service?.id ?? candidate.project.id),
+    ).toEqual(["s4", "project-3"]);
     expect(grouped.unavailable.map((candidate) => candidate.project.id)).toEqual([
       "project-1",
       "project-2",

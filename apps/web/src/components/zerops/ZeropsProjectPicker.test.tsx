@@ -58,3 +58,41 @@ describe("ZeropsProjectPicker rows", () => {
     expect(markup).not.toContain("Enable Zerops Code");
   });
 });
+
+describe("ZeropsProjectPicker preparing section", () => {
+  const PROVISIONING_CANDIDATE: ZeropsCandidate = {
+    key: "project-2",
+    project: { id: "project-2", name: "fresh", status: "CREATING" },
+    group: "provisioning",
+    reason: "project is being created",
+  };
+
+  it("offers a way to wait on a project that is still being created", () => {
+    const markup = renderToStaticMarkup(
+      <ZeropsProjectPicker
+        candidates={[PROVISIONING_CANDIDATE]}
+        isLoading={false}
+        error={null}
+        onRefresh={noop}
+        onWait={noop}
+      />,
+    );
+
+    expect(markup).toContain("Preparing");
+    expect(markup).toContain("Wait for it");
+  });
+
+  it("does not offer the wait action when the caller has none to give", () => {
+    const markup = renderToStaticMarkup(
+      <ZeropsProjectPicker
+        candidates={[PROVISIONING_CANDIDATE]}
+        isLoading={false}
+        error={null}
+        onRefresh={noop}
+      />,
+    );
+
+    expect(markup).toContain("Preparing");
+    expect(markup).not.toContain("Wait for it");
+  });
+});

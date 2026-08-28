@@ -17,7 +17,7 @@ import {
 } from "@t3tools/client-runtime/zerops";
 import type { EnvironmentId } from "@t3tools/contracts";
 
-export type ZeropsCandidateGroup = "connected" | "ready" | "unavailable";
+export type ZeropsCandidateGroup = "connected" | "ready" | "provisioning" | "unavailable";
 
 export interface ZeropsCandidateService {
   readonly id: string;
@@ -105,6 +105,25 @@ function unavailable(project: ZeropsProject, reason: string, key = project.id): 
   return { key, project, group: "unavailable", reason };
 }
 
+function provisioningProject(project: ZeropsProject, reason: string): ZeropsCandidate {
+  return { key: project.id, project, group: "provisioning", reason };
+}
+
+/**
+ * `ZeropsProject.status` / `ZeropsService.status` are plain `string`s in
+ * `packages/client-runtime/src/zerops/api.ts` — there is no status union to
+ * derive this from, so these sets are curated from the known Zerops status
+ * values that mean "still on its way up", not "wrong" or "gone".
+ */
+const PROJECT_PROVISIONING_STATUSES = new Set(["NEW", "CREATING"]);
+const SERVICE_PROVISIONING_STATUSES = new Set([
+  "NEW",
+  "CREATING",
+  "STARTING",
+  "RESTARTING",
+  "UPGRADING",
+]);
+
 /**
  * Every candidate one project contributes — one per zcp container, so a project
  * holding two of them offers both rather than collapsing into "ambiguous".
@@ -117,6 +136,9 @@ export function deriveZeropsCandidates(
   connectedOrigins: ReadonlyMap<string, EnvironmentId>,
 ): ReadonlyArray<ZeropsCandidate> {
   if (project.status !== "ACTIVE") {
+    if (PROJECT_PROVISIONING_STATUSES.has(project.status)) {
+      return [provisioningProject(project, "project is being created")];
+    }
     return [unavailable(project, `project is ${project.status}`)];
   }
   if (services === null) {
@@ -136,6 +158,15 @@ export function deriveZeropsCandidates(
       status: service.status,
     };
     if (service.status !== "ACTIVE") {
+      if (SERVICE_PROVISIONING_STATUSES.has(service.status)) {
+        return {
+          key,
+          project,
+          group: "provisioning",
+          reason: `container is starting (${service.status})`,
+          service: candidateService,
+        };
+      }
       return {
         key,
         project,
@@ -180,15 +211,18 @@ export function deriveZeropsCandidates(
 export function groupZeropsCandidates(candidates: ReadonlyArray<ZeropsCandidate>): {
   readonly connected: ReadonlyArray<ZeropsCandidate>;
   readonly ready: ReadonlyArray<ZeropsCandidate>;
+  readonly provisioning: ReadonlyArray<ZeropsCandidate>;
   readonly unavailable: ReadonlyArray<ZeropsCandidate>;
 } {
   const connected: ZeropsCandidate[] = [];
   const ready: ZeropsCandidate[] = [];
+  const provisioning: ZeropsCandidate[] = [];
   const unavailable: ZeropsCandidate[] = [];
   for (const candidate of candidates) {
     if (candidate.group === "connected") connected.push(candidate);
     else if (candidate.group === "ready") ready.push(candidate);
+    else if (candidate.group === "provisioning") provisioning.push(candidate);
     else unavailable.push(candidate);
   }
-  return { connected, ready, unavailable };
+  return { connected, ready, provisioning, unavailable };
 }
