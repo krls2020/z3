@@ -1,120 +1,64 @@
-# T3 Code
+# z3 — Zerops Code
 
-T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
+A control surface for coding agents that live **inside Zerops containers**.
 
-Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, and OpenCode. If they're set up on your computer, T3 Code can control them.
+A **hard fork** of [T3 Code](https://github.com/pingdotgg/t3code) (MIT), frozen at upstream commit
+`f94a0d646ed78a4788e4af6417f74202a628a5e9` (tag `upstream-base-2026-08-28`) — no further
+`git merge`/`rebase upstream/main`. Upstream's own README is kept unmodified at
+[`docs/upstream-README.md`](docs/upstream-README.md); their `LICENSE` and copyright notice are
+untouched, as MIT requires. What continues past the freeze, and how: see "Where to read next"
+below.
 
-## "Wait, what are you selling me?"
+## The idea in one paragraph
 
-Nothing. We built T3 Code because we wanted the best possible development experience with agents. We were inspired by existing solutions like the Codex desktop app, Conductor, Claude Desktop and Cursor Glass, but none met our bar.
+Every Zerops project already runs a `zcp` container: Ubuntu, a shell, the project's code, and
+Claude Code + Codex already installed and authorized. So z3's server runs **inside that
+container**, under `/z3/`, and the client — web, desktop, mobile — is a thin surface: a user signs
+in with their own Zerops account and reaches the container directly, no pairing code and no
+shared container secret. The agent sits next to the code — file operations are local, work
+survives closing your laptop — and it already has the platform in its hands: the `zerops_*` MCP
+tools (deploy, logs, import, scale, env, subdomain…) that make this different from a generic
+agent GUI.
 
-We wanted something performant, remote-ready, and truly open. If we ever go the wrong direction, we want you to have everything you need to fork and build the editor that you want.
-
-## Installation
-
-> [!WARNING]
-> T3 Code currently supports Codex, Claude, Cursor, Grok Build and OpenCode. Install and authenticate at least one provider before use:
->
-> - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-> - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-> - Cursor: install [Cursor CLI](https://cursor.com/cli) and run `agent login`
-> - Grok Build: install [Grok Build CLI](https://x.ai/cli) and run `grok login`
-> - OpenCode: install [OpenCode](https://opencode.ai) and run `opencode auth login`
-
-### Try it out (install-free)
-
-The easiest way to test T3 Code is to run the server in your terminal (requires Node.js 22.16+, 23.11+, or 24.10+):
-
-```bash
-npx t3@latest
+```
+  laptop / phone / browser                    zcp container (one per Zerops project)
+ ┌──────────────────────────┐                ┌─────────────────────────────────────┐
+ │  z3 client                │   signs in    │  z3 server, served at /z3/          │
+ │  threads, approvals,      │◄──────────────►  spawns `claude` / `codex` ──► the  │
+ │  diffs, terminal          │  with Zerops   │  zcp MCP tools; /var/www, git, term │
+ └──────────────────────────┘   identity     └─────────────────────────────────────┘
 ```
 
-This will launch T3 Code's backend on your machine as well as the local web app to control your agents.
+## What runs where
 
-Tip: Use `npx t3@latest --help` for the full CLI reference.
+- **Sign-in is a Zerops identity, not a pairing code.** The door checks project membership and
+  mints a session; there is no code to copy and no secret shared out of band. Design:
+  `../zcp/docs/spec-z3.md` §3.
+- **The server ships with the container's own release**, at `/z3/` behind zcp's nginx, not on a
+  separate port. Delivery: `../zcp/docs/spec-z3.md` §2.
+- **The agent's leverage is the `zerops_*` MCP toolset** already wired into the container. That
+  toolset lives in `zcp`, not here — z3 is the client and the harness around it.
 
-### Desktop app
+## What is Zerops-specific here
 
-Install the latest version of the desktop app from [GitHub Releases](https://github.com/pingdotgg/t3code/releases), or from your favorite package registry:
+Most of this repo is upstream T3 Code, either **imported** byte-identical (the wire-protocol
+packages) or **ported** behind our own interface (the provider drivers). The parts that are ours
+alone: `apps/server/src/zerops/**` and `apps/web/src/zerops/**`. The full zone map — what's
+imported, ported, owned, or deleted, and why — is `docs/internals/zerops/fork.md` §3–§4.
 
-#### Windows (`winget`)
+## Where to read next
 
-```bash
-winget install T3Tools.T3Code
-```
+- [`CLAUDE.md`](CLAUDE.md) — the knowledge map: where design, rules, measured facts, and tests
+  each live.
+- [`docs/internals/zerops/fork.md`](docs/internals/zerops/fork.md) — the fork rules: the hard-fork
+  decision, the zones, what was kept and what was deleted, how work gets done, upstream intake.
+- `../zcp/docs/spec-z3.md` — the design spec: the envelope on the wire, delivery, the door, client
+  flow, the Zerops-aware client, git.
+- [`docs/internals/zerops/`](docs/internals/zerops/) — the measured-facts ledger
+  (`verified.md`, `questions.md`, `hacks.md`, `map.md`, `poc-findings.md`) and `intake.md`.
 
-#### macOS (Homebrew)
+## Delivering a dev build
 
-```bash
-brew install --cask t3-code
-```
-
-#### Arch Linux (AUR)
-
-Stable:
-
-```bash
-yay -S t3code-bin
-```
-
-Nightly:
-
-```bash
-yay -S t3code-nightly-bin
-```
-
-The AUR packaging is maintained in this repository under [`packaging/aur`](./packaging/aur).
-
-## Some notes
-
-We are very very early in this project. Expect bugs.
-
-We are (mostly) not accepting contributions yet. Small fixes may be considered. Big features will not be.
-
-## Documentation
-
-Full docs live in [docs/](./docs). There's no docs site yet.
-
-- [Install and first run](./docs/user/install.md)
-- [Permission modes](./docs/user/permission-modes.md)
-- [Keyboard shortcuts](./docs/user/keybindings.md)
-- [Customize a project icon](./docs/user/project-settings.md)
-- [Remote access from a phone or another machine](./docs/user/remote-access.md)
-- [Keeping app and server in sync](./docs/user/updating.md)
-- [Source control integrations](./docs/user/source-control.md)
-- Multiple accounts: [Codex](./docs/user/providers-codex.md) · [Claude](./docs/user/providers-claude.md)
-- Linux: [run T3 Code as a background service](./docs/user/background-service.md)
-
-Building from source? Start at [docs/internals/overview.md](./docs/internals/overview.md).
-
-## If you REALLY want to contribute still.... read this first
-
-### Install `vp`
-
-T3 Code uses Vite+ so you'll need to install the global `vp` command-line tool.
-
-#### macOS / Linux
-
-```bash
-curl -fsSL https://vite.plus | bash
-```
-
-#### Windows
-
-```bash
-irm https://vite.plus/ps1 | iex
-```
-
-Checkout their getting started guide for more information: https://viteplus.dev/guide/
-
-### Install dependencies
-
-```bash
-vp i
-```
-
-Read [CONTRIBUTING.md](./CONTRIBUTING.md) before reporting a bug or opening a PR.
-
-Have a feature request? Start an [Ideas discussion](https://github.com/pingdotgg/t3code/discussions/categories/ideas).
-
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+Not a release — the push loop in the sibling `zcp` repo builds and installs a dev build onto a
+running container: `../zcp/eval/scripts/z3-dev-push.sh z3`. A container restart wipes a dev
+build; push again after.
