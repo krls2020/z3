@@ -8,6 +8,7 @@ export type SettingsPath =
   | "/settings/integrations"
   | "/settings/source-control"
   | "/settings/connections"
+  | "/settings/zerops"
   | "/settings/archived";
 
 export interface SettingsSearchItem {
@@ -32,6 +33,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
   "/settings/connections": "Connections",
+  "/settings/zerops": "Zerops",
   "/settings/archived": "Archive",
 };
 
@@ -247,6 +249,16 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "remote-environments",
     title: "Remote environments",
     to: "/settings/connections",
+  },
+  {
+    id: "zerops-account",
+    title: "Zerops account",
+    to: "/settings/zerops",
+  },
+  {
+    id: "zerops-organizations",
+    title: "Zerops organizations",
+    to: "/settings/zerops",
   },
   {
     id: "archive",

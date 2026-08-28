@@ -154,6 +154,10 @@
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"
+    },
+    "./zerops": {
+      "types": "./src/zerops/index.ts",
+      "default": "./src/zerops/index.ts"
     }
   },
   "scripts": {

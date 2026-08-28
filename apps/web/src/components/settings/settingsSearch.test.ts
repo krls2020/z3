@@ -4,6 +4,7 @@ import {
   searchableSetting,
   searchSettings,
   SETTINGS_SEARCH_ITEMS,
+  SETTINGS_SECTION_LABELS,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -88,6 +89,23 @@ describe("searchSettings", () => {
       id: "environment-identification",
       to: "/settings/appearance",
       targetId: "appearance",
+    });
+  });
+});
+
+describe("Zerops settings section", () => {
+  it("registers /settings/zerops so the sidebar nav renders it", () => {
+    expect(SETTINGS_SECTION_LABELS["/settings/zerops"]).toBe("Zerops");
+  });
+
+  it("finds the Zerops account row and routes it to its own section", () => {
+    expect(searchSettings("zerops account")[0]).toMatchObject({
+      id: "zerops-account",
+      to: "/settings/zerops",
+    });
+    expect(searchableSetting("zerops-account")).toEqual({
+      id: "zerops-account",
+      title: "Zerops account",
     });
   });
 });
