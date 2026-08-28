@@ -117,6 +117,9 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
+import { ZeropsToolCard } from "../zerops/ZeropsToolCard";
+import { readZeropsCardSource } from "../../zerops/cards/decode";
+import { decodeZeropsCard } from "../../zerops/cards/payloads";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   buildReviewCommentRenderablePatch,
@@ -2588,6 +2591,18 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // Before any hooks: spawn CTA rows render their own component.
   if (workEntry.agentSpawn) {
     return <AgentSpawnCtaRow workEntry={workEntry} />;
+  }
+  // A zerops_* result this build can read renders as a card. Everything that
+  // cannot be read — a tool with no card, a payload from a newer zcp, a result
+  // the server dropped as oversized — falls through to the row below, which is
+  // what "a card degrades to the generic tool block" means.
+  const zeropsCard = decodeZeropsCard(
+    readZeropsCardSource(workEntry.zeropsResult, {
+      failed: workEntry.toolLifecycleStatus === "failed",
+    }),
+  );
+  if (zeropsCard !== undefined) {
+    return <ZeropsToolCard payload={zeropsCard} />;
   }
   return (
     <PlainWorkEntryRow

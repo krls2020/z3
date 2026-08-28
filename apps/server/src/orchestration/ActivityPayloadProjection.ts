@@ -4,6 +4,8 @@ import type {
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
 
+import { projectZeropsResult } from "../zerops/zeropsActivityResult.ts";
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -348,12 +350,21 @@ export function projectActivityPayload(
       ? { ...payload, status: itemStatus }
       : payload;
 
+  /**
+   * A `zerops_*` result is a document the client decodes into a card, not
+   * output to skim, so a bounded copy survives the slimming below. The gate is
+   * the tool NAME and it sits HERE rather than inside the mcp branch, because
+   * Claude types `mcp__zerops__zerops_delete` as `file_change` — an
+   * mcp-branch-only hook would drop exactly the calls that rename around it.
+   */
+  const zerops = projectZeropsResult(data);
+
   if (payload.itemType === "mcp_tool_call") {
     return {
       ...activity,
       payload: {
         ...projectedPayload,
-        data: projectMcpToolCallData(data),
+        data: { ...projectMcpToolCallData(data), ...(zerops === undefined ? {} : { zerops }) },
       },
     };
   }
@@ -385,6 +396,10 @@ export function projectActivityPayload(
   const rawOutput = projectRawOutput(data.rawOutput) ?? projectAcpContent(data.content);
   if (rawOutput) {
     projectedData.rawOutput = rawOutput;
+  }
+
+  if (zerops !== undefined) {
+    projectedData.zerops = zerops;
   }
 
   return {
