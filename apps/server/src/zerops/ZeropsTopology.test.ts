@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
@@ -244,6 +245,44 @@ describe("ZeropsTopology", () => {
             ? published.value.services.map((service) => service.hostname)
             : [],
         ).toEqual(["kanbandev", "db"]);
+      }),
+    ),
+  );
+});
+
+describe("ZeropsTopology — the shape ws.ts subscribes through", () => {
+  it.effect("keeps pushing after the first frame", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli((attempt) =>
+          Effect.succeed(attempt === 1 ? read(["kanbandev"]) : read(["kanbandev", "db"])),
+        );
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
+        });
+
+        // Verbatim the expression `ws.ts` hands to `observeRpcStream`. The
+        // service's own `subscribe` is already covered above; what this pins is
+        // that wrapping it this way does not cut the subscription's lifetime
+        // short — the live symptom was exactly one frame and then silence.
+        const stream = Stream.unwrap(
+          Effect.map(topology.subscribe, ({ latest, changes }) =>
+            Stream.concat(Stream.make(latest), changes),
+          ),
+        );
+
+        const seen = yield* Queue.unbounded<number>();
+        yield* Stream.runForEach(stream, (snapshot) =>
+          Queue.offer(seen, snapshot.services.length),
+        ).pipe(Effect.forkChild);
+
+        // Taking the first frame is the receipt that the subscription is live,
+        // so the doorbell below cannot race it. No clock involved.
+        expect(yield* Queue.take(seen)).toBe(1);
+        yield* fake.ringDoorbell("topology-changed");
+        expect(yield* Queue.take(seen)).toBe(2);
       }),
     ),
   );
