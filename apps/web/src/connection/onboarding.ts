@@ -36,3 +36,20 @@ export const connectSshEnvironment = createRuntimeCommand(connectionAtomRuntime,
   execute: (input: { readonly target: DesktopSshEnvironmentTarget; readonly label?: string }) =>
     ConnectionOnboarding.pipe(Effect.flatMap((onboarding) => onboarding.registerSsh(input))),
 });
+
+/**
+ * The Zerops door. Single-flight on the container's base URL so a double click
+ * cannot mint two grants for the same environment.
+ */
+export const connectZeropsIdentity = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:connection:connect-zerops-identity",
+  scheduler: onboardingScheduler,
+  concurrency: {
+    mode: "singleFlight",
+    key: (input: { readonly httpBaseUrl: string }) => input.httpBaseUrl,
+  },
+  execute: (input: { readonly httpBaseUrl: string; readonly zeropsToken: string }) =>
+    ConnectionOnboarding.pipe(
+      Effect.flatMap((onboarding) => onboarding.registerZeropsIdentity(input)),
+    ),
+});

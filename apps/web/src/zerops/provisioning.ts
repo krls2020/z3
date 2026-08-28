@@ -151,6 +151,24 @@ export function startProvisioning(input: {
   return waiting("awaiting-project", input.nowMs);
 }
 
+/**
+ * Starts at the health wait for a container the caller already knows about —
+ * the picker path, where a project and its container exist and the only
+ * question is whether Zerops Code answers on it.
+ */
+export function startProvisioningForContainer(input: {
+  readonly projectId: string;
+  readonly serviceId: string | null;
+  readonly containerOrigin: string;
+  readonly nowMs: number;
+}): ProvisioningState {
+  return waiting("awaiting-health", input.nowMs, {
+    projectId: input.projectId,
+    containerServiceId: input.serviceId,
+    containerOrigin: input.containerOrigin,
+  });
+}
+
 function newestProject(projects: ReadonlyArray<ZeropsProject>): ZeropsProject | undefined {
   // A claim hands over a brand-new project, so on an account that already had
   // one the newest row is the one to follow.

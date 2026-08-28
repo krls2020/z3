@@ -49,6 +49,17 @@ const ZCP_SERVICE_TYPE_PREFIX = "zcp@";
  */
 export const ZCP_HTTP_PORT = 8080;
 
+/**
+ * Zerops Code is proxied under this prefix on the container's single port,
+ * beside code-server — it does not have an origin or a port of its own.
+ */
+export const ZEROPS_CODE_BASE_PATH = "/z3";
+
+/** The z3 server's base URL for a container origin, prefix included. */
+export function zeropsCodeBaseUrl(containerOrigin: string): string {
+  return `${containerOrigin.replace(/\/+$/, "")}${ZEROPS_CODE_BASE_PATH}`;
+}
+
 function isZcpService(service: ZeropsService): boolean {
   return (service.serviceStackTypeInfo?.serviceStackTypeVersionName ?? "").startsWith(
     ZCP_SERVICE_TYPE_PREFIX,

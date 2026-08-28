@@ -14,6 +14,7 @@ import {
   isProvisioningWaiting,
   readProvisioning,
   startProvisioning,
+  startProvisioningForContainer,
   type ProvisioningEvent,
   type ProvisioningState,
 } from "./provisioning";
@@ -26,6 +27,11 @@ export function useZeropsProvisioning(clientId: string | null): {
   readonly error: string | null;
   readonly busy: boolean;
   readonly start: (input: { readonly zcpClaimed?: boolean }) => void;
+  readonly startForContainer: (input: {
+    readonly projectId: string;
+    readonly serviceId: string | null;
+    readonly containerOrigin: string;
+  }) => void;
   readonly cancel: () => void;
   readonly retry: () => void;
   readonly enable: () => void;
@@ -88,6 +94,10 @@ export function useZeropsProvisioning(clientId: string | null): {
     start: (input) => {
       setError(null);
       setState(startProvisioning({ ...input, nowMs: Date.now() }));
+    },
+    startForContainer: (input) => {
+      setError(null);
+      setState(startProvisioningForContainer({ ...input, nowMs: Date.now() }));
     },
     cancel: () => {
       setState(null);

@@ -9,6 +9,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 
 import { bootstrapRemoteBearerSession } from "../authorization/remote.ts";
+import { mintZeropsIdentityCredential } from "../authorization/zerops.ts";
 import { deriveWsBaseUrl, normalizeHttpBaseUrl } from "../environment/endpoint.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import * as ClientCapabilities from "../platform/capabilities.ts";
@@ -43,6 +44,16 @@ export interface SshConnectionInput {
   readonly label?: string;
 }
 
+export interface ZeropsIdentityConnectionInput {
+  /**
+   * The container's z3 base URL — the public origin plus the path prefix it is
+   * proxied under, `https://<container>/z3`.
+   */
+  readonly httpBaseUrl: string;
+  /** The signed-in account's Zerops access token, held only by the client. */
+  readonly zeropsToken: string;
+}
+
 export interface BearerConnectionUpdateInput {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -54,6 +65,12 @@ export class ConnectionOnboarding extends Context.Service<
   {
     readonly registerPairing: (
       input: PairingConnectionInput,
+    ) => Effect.Effect<
+      EnvironmentId,
+      ConnectionAttemptError | Persistence.ConnectionPersistenceError
+    >;
+    readonly registerZeropsIdentity: (
+      input: ZeropsIdentityConnectionInput,
     ) => Effect.Effect<
       EnvironmentId,
       ConnectionAttemptError | Persistence.ConnectionPersistenceError
@@ -116,6 +133,72 @@ export const preparePairingRegistration = Effect.fn(
       token: access.access_token,
     }),
   });
+});
+
+/**
+ * The Zerops door, which differs from pairing only in where the one-time
+ * credential comes from: instead of a code the user typed, the environment
+ * mints one after proving the caller is a member of its project. Everything
+ * after that — the RFC 8693 exchange, the registration shape — is upstream's,
+ * unchanged.
+ *
+ * The Zerops access token is spent here and nowhere else. It travels in the
+ * identity request's body as the subject being proven, never as an
+ * Authorization header, and never reaches the token exchange.
+ */
+export const prepareZeropsIdentityRegistration = Effect.fn(
+  "clientRuntime.connection.onboarding.prepareZeropsIdentityRegistration",
+)(function* (input: ZeropsIdentityConnectionInput) {
+  const httpBaseUrl = yield* Effect.try({
+    try: () => normalizeHttpBaseUrl(input.httpBaseUrl),
+    catch: (cause) =>
+      new ConnectionBlockedError({
+        reason: "configuration",
+        detail: cause instanceof Error ? cause.message : "The container URL is invalid.",
+      }),
+  });
+  const presentation = yield* ClientCapabilities.ClientPresentation;
+  const descriptor = yield* fetchRemoteEnvironmentDescriptor({ httpBaseUrl }).pipe(
+    Effect.mapError(mapRemoteEnvironmentError),
+  );
+  const minted = yield* mintZeropsIdentityCredential({
+    httpBaseUrl,
+    zeropsToken: input.zeropsToken,
+  }).pipe(Effect.mapError(mapRemoteEnvironmentError));
+  const access = yield* bootstrapRemoteBearerSession({
+    httpBaseUrl,
+    credential: minted.credential,
+    scopes: presentation.scopes,
+    clientMetadata: presentation.metadata,
+  }).pipe(Effect.mapError(mapRemoteEnvironmentError));
+  const connectionId = `bearer:${descriptor.environmentId}`;
+
+  return new BearerConnectionRegistration({
+    target: new BearerConnectionTarget({
+      environmentId: descriptor.environmentId,
+      label: descriptor.label,
+      connectionId,
+    }),
+    profile: new BearerConnectionProfile({
+      connectionId,
+      environmentId: descriptor.environmentId,
+      label: descriptor.label,
+      httpBaseUrl,
+      wsBaseUrl: deriveWsBaseUrl(httpBaseUrl),
+    }),
+    credential: new BearerConnectionCredential({
+      token: access.access_token,
+    }),
+  });
+});
+
+export const registerZeropsIdentityConnection = Effect.fn(
+  "clientRuntime.connection.onboarding.registerZeropsIdentityConnection",
+)(function* (input: ZeropsIdentityConnectionInput) {
+  const registration = yield* prepareZeropsIdentityRegistration(input);
+  const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+  yield* registry.register(registration);
+  return registration.target.environmentId;
 });
 
 export const registerPairingConnection = Effect.fn(
@@ -252,6 +335,12 @@ export const make = Effect.gen(function* () {
   return ConnectionOnboarding.of({
     registerPairing: (input) =>
       registerPairingConnection(input).pipe(
+        Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
+        Effect.provideService(ClientCapabilities.ClientPresentation, presentation),
+        Effect.provideService(HttpClient.HttpClient, httpClient),
+      ),
+    registerZeropsIdentity: (input) =>
+      registerZeropsIdentityConnection(input).pipe(
         Effect.provideService(EnvironmentRegistry.EnvironmentRegistry, registry),
         Effect.provideService(ClientCapabilities.ClientPresentation, presentation),
         Effect.provideService(HttpClient.HttpClient, httpClient),
