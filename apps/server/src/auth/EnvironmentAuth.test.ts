@@ -10,6 +10,7 @@ import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
+import { resolveZeropsEnvironment } from "../zerops/ZeropsEnvironment.ts";
 import * as SessionStore from "./SessionStore.ts";
 
 /** Pinned so dev-mode cookie tests can assert the port-scoped name. */
@@ -59,6 +60,15 @@ const makeBearerRequest = (
   }) as unknown as Parameters<
     EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]
   >[0];
+
+const MEMBERSHIP_TTL_SECONDS = 900;
+
+const zeropsTestEnvironment = resolveZeropsEnvironment({
+  projectId: "nTV3oMB2SS634ImDJnQckg",
+  apiHost: undefined,
+  allowedOrigins: [],
+  membershipTtlSeconds: MEMBERSHIP_TTL_SECONDS,
+});
 
 const requestMetadata = {
   deviceType: "desktop" as const,
@@ -272,6 +282,95 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
           }),
         ),
       ),
+  );
+
+  it.effect("caps a session from the identity door at the membership window", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.createPairingLink({
+        method: "zerops-identity",
+        subject: "a-zerops-user-id",
+      });
+      const access = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        issued.credential,
+        undefined,
+        requestMetadata,
+      );
+
+      // The window IS this session's lifetime: the holder has a Zerops token
+      // and re-mints with it, and that re-mint is the real membership check.
+      expect(access.expires_in).toBeLessThanOrEqual(MEMBERSHIP_TTL_SECONDS);
+      expect(access.expires_in).toBeGreaterThan(MEMBERSHIP_TTL_SECONDS - 30);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ zerops: zeropsTestEnvironment }))),
+  );
+
+  it.effect("leaves a one-time-token pairing on the ordinary session lifetime", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.issuePairingCredential({});
+      const access = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        issued.credential,
+        undefined,
+        requestMetadata,
+      );
+
+      // A second device paired with a one-time token holds no Zerops token, so
+      // it has nothing to re-mint with. Capping it at the membership window
+      // would log it out with no way back in.
+      expect(access.expires_in).toBeGreaterThan(MEMBERSHIP_TTL_SECONDS);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ zerops: zeropsTestEnvironment }))),
+  );
+
+  it.effect("keeps DPoP's own lifetime for a one-time-token pairing", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.createPairingLink({
+        proofKeyThumbprint: "a-jwk-thumbprint",
+      });
+      const access = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        issued.credential,
+        undefined,
+        requestMetadata,
+        { proofKeyThumbprint: "a-jwk-thumbprint" },
+      );
+
+      expect(access.token_type).toBe("DPoP");
+      expect(access.expires_in).toBeGreaterThan(MEMBERSHIP_TTL_SECONDS);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ zerops: zeropsTestEnvironment }))),
+  );
+
+  it.effect("caps a DPoP session from the identity door at the window, not the hour", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.createPairingLink({
+        method: "zerops-identity",
+        subject: "a-zerops-user-id",
+        proofKeyThumbprint: "a-jwk-thumbprint",
+      });
+      const access = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        issued.credential,
+        undefined,
+        requestMetadata,
+        { proofKeyThumbprint: "a-jwk-thumbprint" },
+      );
+
+      expect(access.token_type).toBe("DPoP");
+      expect(access.expires_in).toBeLessThanOrEqual(MEMBERSHIP_TTL_SECONDS);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer({ zerops: zeropsTestEnvironment }))),
+  );
+
+  it.effect("leaves the identity door's own lifetime alone outside a Zerops project", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const issued = yield* serverAuth.createPairingLink({ method: "zerops-identity" });
+      const access = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        issued.credential,
+        undefined,
+        requestMetadata,
+      );
+
+      expect(access.expires_in).toBeGreaterThan(MEMBERSHIP_TTL_SECONDS);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 
   it.effect("revokes every session belonging to one subject and leaves the rest", () =>

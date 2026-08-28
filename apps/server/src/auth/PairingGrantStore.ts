@@ -197,6 +197,12 @@ export class PairingGrantStore extends Context.Service<
   PairingGrantStore,
   {
     readonly issueOneTimeToken: (input?: {
+      /**
+       * Which door minted this grant. Defaults to `one-time-token`; the Zerops
+       * identity door names itself, because what a session is allowed to
+       * assume about its holder depends on how they proved themselves.
+       */
+      readonly method?: ServerAuthBootstrapMethod;
       readonly ttl?: Duration.Duration;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
@@ -403,7 +409,7 @@ export const make = Effect.gen(function* () {
       .create({
         id,
         credential,
-        method: "one-time-token",
+        method: input?.method ?? "one-time-token",
         scopes: input?.scopes ?? AuthStandardClientScopes,
         subject,
         label: input?.label ?? null,

@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
-import { AuthEnvironmentScopes } from "@t3tools/contracts";
+import { AuthEnvironmentScopes, ServerAuthBootstrapMethod } from "@t3tools/contracts";
 
 import {
   type AuthPairingLinkRepositoryError,
@@ -18,7 +18,7 @@ import {
 export const AuthPairingLinkRecord = Schema.Struct({
   id: Schema.String,
   credential: Schema.String,
-  method: Schema.Literals(["desktop-bootstrap", "one-time-token"]),
+  method: ServerAuthBootstrapMethod,
   scopes: Schema.fromJsonString(AuthEnvironmentScopes),
   subject: Schema.String,
   label: Schema.NullOr(Schema.String),
@@ -33,7 +33,7 @@ export type AuthPairingLinkRecord = typeof AuthPairingLinkRecord.Type;
 export const CreateAuthPairingLinkInput = Schema.Struct({
   id: Schema.String,
   credential: Schema.String,
-  method: Schema.Literals(["desktop-bootstrap", "one-time-token"]),
+  method: ServerAuthBootstrapMethod,
   scopes: AuthEnvironmentScopes,
   subject: Schema.String,
   label: Schema.NullOr(Schema.String),
