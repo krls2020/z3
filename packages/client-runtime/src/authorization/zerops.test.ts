@@ -65,12 +65,13 @@ describe("mintZeropsIdentityCredential", () => {
     }),
   );
 
-  it.effect("keeps the environment's base path in the mint URL", () =>
+  it.effect("addresses the door below the base path the environment is served under", () =>
     Effect.gen(function* () {
-      // An environment served under `/z3/` (nginx strips the prefix, the client
-      // must keep it) is addressed at `/z3/api/...`: `environmentEndpointUrl`
-      // joins the base path instead of replacing the pathname. Every client
-      // call has this shape, not just this one.
+      // The request URL comes from the contract client's base
+      // (`rpc/http.ts` `remoteApiBaseUrl`), which keeps the prefix and lets
+      // `prependUrl` join the route onto it; `environmentEndpointUrl` only
+      // labels error messages. Every client call has this shape, not just
+      // this one.
       const fetch = recordedFetch(credentialResponse());
 
       yield* mintZeropsIdentityCredential({
