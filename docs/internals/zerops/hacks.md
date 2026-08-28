@@ -124,7 +124,9 @@ predicted — no residual bootstrap gap, and `questions.md` Q-01 (whether a `zsc
 survives a full restart) is moot for z3/z3sidecar specifically since neither uses that primitive
 any more.
 **Residue** `npx` still resolves the package fresh at every container start rather than an
-image-baked install — a network dependency in principle, though the npm cache is warm after the
+image-baked install — a network dependency in principle (measured 2026-08-28, S0.10: on an
+image-fresh container after a redeploy, unit start → `z3Up` took **58 s**; after a plain restart
+with a warm cache, 4 s), though the npm cache is warm after the
 first run and z3/z3sidecar share one pinned version so there's exactly one thing to fetch. This
 mirrors the same class of boot-path network dependency `install.sh` already has for `zcp` itself
 (`plans/research/zcp-install-delivery-architecture-2026-08-24.md`'s F1) — not re-litigated here as
@@ -411,6 +413,10 @@ commit after the push, `zcp init` + `nginx -s reload` clean); z3 half see `verif
 **Where** the dev targets — `z3-eval`'s zcp has Claude logged in through the owner's
 subscription; its credential artifacts (`~/.claude/.credentials.json`, `~/.claude.json`) are
 stashed on the laptop outside every repo and copied into each further throwaway service.
+**Measured 2026-08-28 (S0.8):** `~/.claude/.credentials.json` alone (mode 600) is the whole
+working set — the container's own `~/.claude.json` keeps its `mcpServers`, no merge; the MCP
+answers under the copied login; the access token lives ~8 h and two containers used it
+concurrently without conflict (the refresh race past `expiresAt` is `questions.md` Q-12).
 **Why** API keys are not a product path (subscription login is the point of the T3 fork), and
 the in-container login flow is S7, phase 2 — until it exists, tests still need an authorized
 agent.
