@@ -289,3 +289,44 @@ describe("readProvisioning", () => {
     expect(urls).toHaveLength(0);
   });
 });
+
+describe("enabling Zerops Code on an older container", () => {
+  function reachNeedsEnable(): ProvisioningState {
+    return advanceProvisioning(
+      advanceProvisioning(
+        reachAwaitingContainer(),
+        { kind: "services", project: PROJECT, services: [container()] },
+        1000,
+      ),
+      { kind: "health", health: "predates-z3" },
+      2000,
+    );
+  }
+
+  it("goes back to waiting for health, with the clock restarted", () => {
+    const restarted = advanceProvisioning(reachNeedsEnable(), { kind: "enable" }, 50_000);
+
+    expect(restarted.phase).toBe("awaiting-health");
+    expect(restarted.phaseStartedAtMs).toBe(50_000);
+    expect(restarted.capMs).toBe(PROVISIONING_CAPS["awaiting-health"]);
+    // The container it is enabling must survive the transition.
+    expect(restarted.containerServiceId).toBe("service-1");
+    expect(restarted.containerOrigin).toBe("https://zcp-24cb-8080.prg1.zerops.app");
+  });
+
+  it("reads the balancer's 502 window as restarting rather than as failure", () => {
+    const restarting = advanceProvisioning(
+      advanceProvisioning(reachNeedsEnable(), { kind: "enable" }, 0),
+      { kind: "health", health: "unreachable" },
+      6000,
+    );
+
+    expect(restarting.phase).toBe("awaiting-health");
+    expect(restarting.detail).toMatch(/restarting/i);
+  });
+
+  it("ignores an enable from anywhere else", () => {
+    const waiting = reachAwaitingContainer();
+    expect(advanceProvisioning(waiting, { kind: "enable" }, 10_000)).toBe(waiting);
+  });
+});
