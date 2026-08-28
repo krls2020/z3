@@ -86,7 +86,12 @@ export function clientPresentationMetadata(input: {
   }
 
   return {
-    label: "T3 Code Web",
+    // The hosted bundle is Zerops Code, and the label is what a user reads in
+    // the environment's session list — where a laptop and a phone would
+    // otherwise be two identical rows.
+    label: input.hosted
+      ? `Zerops Code · ${browserFamily(input.identity.userAgent)} on ${browserClientOs(input.identity)}`
+      : "T3 Code Web",
     deviceType: browserDeviceType(input.identity),
     os: browserClientOs(input.identity),
     surface: "web",

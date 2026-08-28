@@ -11,6 +11,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { groupZeropsCandidates, type ZeropsCandidate } from "~/zerops/candidates";
+import type { ZeropsContainerHealth } from "~/zerops/provisioning";
 
 function CandidateRow({
   candidate,
@@ -72,6 +73,49 @@ function CandidateGroup({
   );
 }
 
+/** What a row says and offers, given what its container answered. */
+function readyRowAction(input: {
+  readonly candidate: ZeropsCandidate;
+  readonly health: ZeropsContainerHealth | undefined;
+  readonly onConnect: ((candidate: ZeropsCandidate) => void) | undefined;
+  readonly onEnable: ((candidate: ZeropsCandidate) => void) | undefined;
+}): ReactNode {
+  const { candidate, health, onConnect, onEnable } = input;
+  if (health === undefined) {
+    return <Spinner className="size-4 text-muted-foreground" />;
+  }
+  // A container from before Zerops Code answers no route with a CORS header,
+  // so from a browser it is indistinguishable from one that is simply away —
+  // and the platform has already told us this service is ACTIVE. A restart is
+  // the action that helps in either case, so it is what the row offers.
+  if (health === "predates-z3" || health === "unreachable") {
+    return onEnable ? (
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={() => {
+          onEnable(candidate);
+        }}
+      >
+        Enable Zerops Code
+      </Button>
+    ) : null;
+  }
+  if (health !== "ready") {
+    return <span className="text-xs text-muted-foreground">Starting…</span>;
+  }
+  return onConnect ? (
+    <Button
+      size="sm"
+      onClick={() => {
+        onConnect(candidate);
+      }}
+    >
+      Connect
+    </Button>
+  ) : null;
+}
+
 /**
  * `onConnect` is supplied once identity bootstrap exists; without it the rows
  * are informational and no half-wired button is rendered.
@@ -80,15 +124,20 @@ export function ZeropsProjectPicker({
   candidates,
   isLoading,
   error,
+  health,
   onRefresh,
   onConnect,
+  onEnable,
   onOpen,
 }: {
   readonly candidates: ReadonlyArray<ZeropsCandidate>;
   readonly isLoading: boolean;
   readonly error: string | null;
+  /** What each container answered, by candidate key; absent means still asking. */
+  readonly health?: ReadonlyMap<string, ZeropsContainerHealth> | undefined;
   readonly onRefresh: () => void;
   readonly onConnect?: ((candidate: ZeropsCandidate) => void) | undefined;
+  readonly onEnable?: ((candidate: ZeropsCandidate) => void) | undefined;
   readonly onOpen?: ((candidate: ZeropsCandidate) => void) | undefined;
 }) {
   const grouped = groupZeropsCandidates(candidates);
@@ -146,19 +195,13 @@ export function ZeropsProjectPicker({
         title="Ready to connect"
         description="A Zerops Code container is running and reachable."
         candidates={grouped.ready}
-        renderAction={
-          onConnect
-            ? (candidate) => (
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    onConnect(candidate);
-                  }}
-                >
-                  Connect
-                </Button>
-              )
-            : undefined
+        renderAction={(candidate) =>
+          readyRowAction({
+            candidate,
+            health: health?.get(candidate.key),
+            onConnect,
+            onEnable,
+          })
         }
       />
       <CandidateGroup

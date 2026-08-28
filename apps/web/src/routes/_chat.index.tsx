@@ -19,6 +19,7 @@ import {
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { resolveChatIndexView } from "./-chatIndexView";
+import { composeZeropsFirstPrompt } from "~/zerops/composeFirstPrompt";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 
 function ChatIndexRouteView() {
@@ -67,10 +68,21 @@ function IndexDraftLanding() {
     startingRef.current = true;
     void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
       replace: true,
-    }).catch(() => {
-      startingRef.current = false;
-      setStartState((state) => ({ ...state, failed: true }));
-    });
+    })
+      .then((started) => {
+        // A project reached through the Zerops door opens with zcp's own
+        // introduction already written, once.
+        if (started) {
+          composeZeropsFirstPrompt({
+            environmentId: mostRecentProject.environmentId,
+            draftId: started.draftId,
+          });
+        }
+      })
+      .catch(() => {
+        startingRef.current = false;
+        setStartState((state) => ({ ...state, failed: true }));
+      });
   }, [handleNewThread, mostRecentProject, startState.retryRequest]);
 
   if (!bootstrapped) {

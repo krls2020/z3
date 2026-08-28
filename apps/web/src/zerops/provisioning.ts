@@ -49,6 +49,11 @@ function isWaitingPhase(phase: ProvisioningPhase): phase is WaitingPhase {
   return phase in PROVISIONING_CAPS;
 }
 
+/** Whether this state is still waiting on something, and so worth polling. */
+export function isProvisioningWaiting(state: ProvisioningState): boolean {
+  return isWaitingPhase(state.phase);
+}
+
 const WAITING_LABELS: Readonly<Record<WaitingPhase, string>> = {
   "awaiting-project": "Waiting for your project to appear",
   "awaiting-container": "Waiting for the Zerops Code container to start",
@@ -81,7 +86,9 @@ export type ProvisioningEvent =
     }
   | { readonly kind: "health"; readonly health: ZeropsContainerHealth }
   | { readonly kind: "tick" }
-  | { readonly kind: "retry" };
+  | { readonly kind: "retry" }
+  /** The user asked for the older container to be restarted into Zerops Code. */
+  | { readonly kind: "enable" };
 
 function waiting(
   phase: WaitingPhase,
@@ -144,6 +151,24 @@ export function startProvisioning(input: {
   return waiting("awaiting-project", input.nowMs);
 }
 
+/**
+ * Starts at the health wait for a container the caller already knows about —
+ * the picker path, where a project and its container exist and the only
+ * question is whether Zerops Code answers on it.
+ */
+export function startProvisioningForContainer(input: {
+  readonly projectId: string;
+  readonly serviceId: string | null;
+  readonly containerOrigin: string;
+  readonly nowMs: number;
+}): ProvisioningState {
+  return waiting("awaiting-health", input.nowMs, {
+    projectId: input.projectId,
+    containerServiceId: input.serviceId,
+    containerOrigin: input.containerOrigin,
+  });
+}
+
 function newestProject(projects: ReadonlyArray<ZeropsProject>): ZeropsProject | undefined {
   // A claim hands over a brand-new project, so on an account that already had
   // one the newest row is the one to follow.
@@ -163,6 +188,18 @@ export function advanceProvisioning(
       projectId: state.projectId,
       containerServiceId: state.containerServiceId,
       containerOrigin: state.containerOrigin,
+    });
+  }
+
+  if (event.kind === "enable") {
+    if (state.phase !== "needs-enable") return state;
+    // A restart re-runs the container's install step, so the wait that follows
+    // is the ordinary health wait with its clock started again.
+    return waiting("awaiting-health", nowMs, {
+      projectId: state.projectId,
+      containerServiceId: state.containerServiceId,
+      containerOrigin: state.containerOrigin,
+      detail: "The container is restarting",
     });
   }
 

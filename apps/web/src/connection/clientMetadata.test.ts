@@ -88,3 +88,34 @@ describe("client telemetry metadata", () => {
     });
   });
 });
+
+describe("hosted client label", () => {
+  const identity = {
+    userAgent:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0 Safari/537.36",
+    platform: "MacIntel",
+    maxTouchPoints: 0,
+  };
+
+  it("names the device, so two clients on one container are told apart", () => {
+    expect(
+      clientPresentationMetadata({
+        appVersion: "1.2.3",
+        hosted: true,
+        identity,
+        desktopBridge: undefined,
+      }).label,
+    ).toBe("Zerops Code · Chrome on macOS");
+  });
+
+  it("leaves a self-hosted web client alone — it is not Zerops Code", () => {
+    expect(
+      clientPresentationMetadata({
+        appVersion: "1.2.3",
+        hosted: false,
+        identity,
+        desktopBridge: undefined,
+      }).label,
+    ).toBe("T3 Code Web");
+  });
+});

@@ -18,12 +18,19 @@ export interface ZeropsRegistrationInput {
    */
   readonly claimZcpPool?: boolean;
   /**
-   * Cloudflare Turnstile token. The API does not require the field at its
-   * validation layer, so the widget stays behind a build flag; when the flag is
-   * off nothing is sent, and the key is never invented client-side.
+   * Cloudflare Turnstile token, obtained by the widget on the page.
+   *
+   * Required, and measured to be so: a complete body with no `token` is
+   * refused with `cloudflareCaptchaVerificationFailed` — a different layer
+   * from the field validation that answers `invalidUserInput`. There is no
+   * captcha-less registration path, so the client refuses to spend a request
+   * on one.
    */
-  readonly turnstileToken?: string;
+  readonly turnstileToken: string;
 }
+
+/** The platform's code for "the captcha did not check out". */
+export const ZEROPS_CAPTCHA_ERROR_CODE = "cloudflareCaptchaVerificationFailed";
 
 export interface ZeropsRegistrationBody {
   readonly email: string;
@@ -32,7 +39,7 @@ export interface ZeropsRegistrationBody {
   readonly accountName: string;
   readonly languageId: string;
   readonly claimZcpPool: boolean;
-  readonly token?: string;
+  readonly token: string;
 }
 
 export function buildZeropsRegistrationBody(
@@ -47,6 +54,21 @@ export function buildZeropsRegistrationBody(
     accountName: input.organizationName.trim(),
     languageId: "en",
     claimZcpPool: input.claimZcpPool ?? true,
-    ...(input.turnstileToken ? { token: input.turnstileToken } : {}),
+    token: input.turnstileToken,
   };
+}
+
+/**
+ * Whether a failure is the platform refusing the captcha rather than the form.
+ * The two are different layers and want different words on screen: a captcha
+ * refusal on a third-party origin means registration is unavailable *here*,
+ * not that the user typed something wrong.
+ */
+export function isZeropsCaptchaRejection(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { readonly code?: unknown }).code === ZEROPS_CAPTCHA_ERROR_CODE
+  );
 }
