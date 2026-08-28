@@ -195,12 +195,10 @@ const targets = [
   { cwd: "/var/www/apidev", prefix: "apidev/" },
 ];
 
-/** The fan-out context, with a probe memory scoped to the one test using it. */
 const fanOut = (
   store: { readonly service: CheckpointStore.CheckpointStore["Service"] },
   vcs: { readonly service: VcsProcess.VcsProcess["Service"] },
-  probed: Set<string> = new Set(),
-) => ({ store: store.service, vcsProcess: vcs.service, probed });
+) => ({ store: store.service, vcsProcess: vcs.service });
 
 describe("captureAcrossTargets", () => {
   it("captures once per repository and merges the diffs into one grouped list", () =>
@@ -244,7 +242,7 @@ describe("captureAcrossTargets", () => {
       const vcs = yield* makeVcsProcess();
 
       yield* captureAcrossTargets(
-        { store: capturing, vcsProcess: vcs.service, probed: new Set() },
+        { store: capturing, vcsProcess: vcs.service },
         {
           targets,
           fromCheckpointRef: ref("refs/t3/checkpoints/x/turn/0"),
@@ -349,7 +347,7 @@ describe("captureAcrossTargets", () => {
       );
     }).pipe(Effect.runPromise));
 
-  it("probes untracked files cheaply, and only before the first capture on a repository", () =>
+  it("probes cheaply before every capture, so a fixed .gitignore lifts the refusal", () =>
     Effect.gen(function* () {
       const store = yield* makeStore();
       const vcs = yield* makeVcsProcess();
@@ -367,7 +365,7 @@ describe("captureAcrossTargets", () => {
       });
 
       const probes = yield* Ref.get(vcs.probes);
-      assert.strictEqual(probes.length, 1);
+      assert.strictEqual(probes.length, 2);
       const [probe] = probes;
       assert.deepStrictEqual(probe?.args, ["ls-files", "--others", "--exclude-standard", "-z"]);
       assert.strictEqual(probe?.maxOutputBytes, UNTRACKED_PROBE_MAX_BYTES);
@@ -420,6 +418,34 @@ describe("captureBaselineAcrossTargets", () => {
 
       assert.deepStrictEqual(result.captured, ["/var/www/apidev"]);
       assert.deepStrictEqual(result.alreadyPresent, ["/var/www/kanbandev"]);
+    }).pipe(Effect.runPromise));
+
+  it("keeps refusing while the repository still overflows, however often it is asked", () =>
+    Effect.gen(function* () {
+      // The reactor drives the baseline twice per turn - once for
+      // thread.turn-start-requested and once for thread.message-sent - through
+      // one shared fan-out. A guard that only refuses the first time lets the
+      // second call commit the very tree it just refused.
+      const store = yield* makeStore({ missingBaseline: new Set(["/var/www/kanbandev"]) });
+      const vcs = yield* makeVcsProcess(new Set(["/var/www/kanbandev"]));
+      const context = fanOut(store, vcs);
+      const input = {
+        targets: [{ cwd: "/var/www/kanbandev", prefix: "" }],
+        checkpointRef: ref("refs/t3/checkpoints/x/turn/0"),
+      };
+
+      const first = yield* captureBaselineAcrossTargets(context, input);
+      const second = yield* captureBaselineAcrossTargets(context, input);
+
+      assert.deepStrictEqual(first.captured, []);
+      assert.deepStrictEqual(second.captured, []);
+      assert.strictEqual(second.skipped.length, 1);
+      assert.deepStrictEqual(
+        (yield* Ref.get(store.calls))
+          .filter((call) => call.op === "captureCheckpoint")
+          .map((call) => call.cwd),
+        [],
+      );
     }).pipe(Effect.runPromise));
 
   it("refuses the repository whose first checkpoint would swallow its untracked tree", () =>

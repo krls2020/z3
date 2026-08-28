@@ -152,25 +152,28 @@ export interface CaptureAcrossTargetsInput {
   readonly toCheckpointRef: CheckpointRef;
 }
 
-/**
- * What a fan-out needs, and the memory it keeps between turns.
- *
- * `probed` is owned by the caller rather than this module: the guard's
- * question is about a repository's `.gitignore`, not about this turn, so it is
- * asked once per repository - on the first checkpoint, the one that would pay
- * the four minutes - and the caller's lifetime is the right scope for that.
- */
+/** What a fan-out needs to reach the repositories it covers. */
 export interface CheckpointFanOut {
   readonly store: CheckpointStore.CheckpointStore["Service"];
   readonly vcsProcess: VcsProcess.VcsProcess["Service"];
-  readonly probed: Set<string>;
 }
 
-const probeUntrackedOverflow = (fanOut: CheckpointFanOut, cwd: string): Effect.Effect<boolean> => {
-  if (fanOut.probed.has(cwd)) {
-    return Effect.succeed(false);
-  }
-  return fanOut.vcsProcess
+/**
+ * Asks, every single time, whether this repository's untracked set would
+ * swallow the checkpoint.
+ *
+ * Deliberately not memoised. An earlier version remembered which repositories
+ * it had already probed, which read like a free optimisation and was in fact
+ * the whole guard: the reactor drives the baseline twice per turn - once for
+ * `thread.turn-start-requested`, once for `thread.message-sent` - so the second
+ * call skipped the probe and committed the very tree the first had refused.
+ * Caching the verdict instead would fix that but strand a repository in
+ * refusal after its `.gitignore` arrives, which the refusal message promises
+ * will recover. The probe is one `ls-files` capped at 256 KB, run concurrently
+ * across repositories - cheap enough to simply ask again.
+ */
+const probeUntrackedOverflow = (fanOut: CheckpointFanOut, cwd: string): Effect.Effect<boolean> =>
+  fanOut.vcsProcess
     .run({
       operation: "ZeropsCheckpointTargets.probeUntracked",
       command: "git",
@@ -180,15 +183,11 @@ const probeUntrackedOverflow = (fanOut: CheckpointFanOut, cwd: string): Effect.E
       maxOutputBytes: UNTRACKED_PROBE_MAX_BYTES,
     })
     .pipe(
-      Effect.map((result) => {
-        fanOut.probed.add(cwd);
-        return result.stdoutTruncated;
-      }),
+      Effect.map((result) => result.stdoutTruncated),
       // A probe that cannot run says nothing about the repository; the
       // checkpoint is the thing worth protecting, not the probe.
       Effect.catchCause(() => Effect.succeed(false)),
     );
-};
 
 /**
  * Captures the turn in every repository it covers, concurrently, and returns

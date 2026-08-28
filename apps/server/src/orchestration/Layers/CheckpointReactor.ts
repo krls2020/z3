@@ -101,7 +101,7 @@ const make = Effect.gen(function* () {
   // Optional on purpose: off Zerops nothing provides it, and every fan-out
   // below then collapses to the single upstream target.
   const repositorySource = yield* Effect.serviceOption(ZeropsRepositorySource);
-  const fanOut = { store: checkpointStore, vcsProcess, probed: new Set<string>() };
+  const fanOut = { store: checkpointStore, vcsProcess };
 
   // Which repositories a checkpoint at this cwd covers. On Zerops the thread's
   // cwd is the workspace root and the repositories are the dev services
