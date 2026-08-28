@@ -34,9 +34,12 @@ import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import { resolveZeropsBootstrapModelSelection } from "./zerops/ZeropsBootstrapModel.ts";
+import { isZeropsEnvironment } from "./zerops/ZeropsEnvironment.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
@@ -174,6 +177,35 @@ export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => ({
   model: DEFAULT_MODEL,
 });
 
+/**
+ * The model selection the auto-bootstrapped project and its first thread open
+ * on.
+ *
+ * Outside a Zerops container this is upstream's hardcoded Codex default,
+ * unchanged. Inside one it becomes the first provider instance that can
+ * actually serve a turn (see `ZeropsBootstrapModel`), because the container's
+ * authenticated CLI is usually Claude Code rather than Codex and a landing
+ * thread pinned to an unauthenticated provider is a dead end.
+ *
+ * `ProviderRegistry` is read as an optional service so this stays callable
+ * from every context the bootstrap already runs in; without it the upstream
+ * default stands.
+ */
+export const resolveAutoBootstrapDefaultModelSelection = Effect.gen(function* () {
+  const serverConfig = yield* ServerConfig.ServerConfig;
+  if (!isZeropsEnvironment(serverConfig)) {
+    return getAutoBootstrapDefaultModelSelection();
+  }
+
+  const registry = yield* Effect.serviceOption(ProviderRegistry.ProviderRegistry);
+  if (Option.isNone(registry)) {
+    return getAutoBootstrapDefaultModelSelection();
+  }
+
+  const providers = yield* registry.value.getProviders;
+  return resolveZeropsBootstrapModelSelection(providers) ?? getAutoBootstrapDefaultModelSelection();
+});
+
 export const resolveWelcomeBase = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const segments = serverConfig.cwd.split(/[/\\]/).filter(Boolean);
@@ -208,7 +240,7 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
         const createdAt = DateTime.formatIso(yield* DateTime.now);
         nextProjectId = ProjectId.make(yield* randomUUID);
         const bootstrapProjectTitle = path.basename(serverConfig.cwd) || "project";
-        nextProjectDefaultModelSelection = getAutoBootstrapDefaultModelSelection();
+        nextProjectDefaultModelSelection = yield* resolveAutoBootstrapDefaultModelSelection;
         yield* orchestrationEngine.dispatch({
           type: "project.create",
           commandId: CommandId.make(yield* randomUUID),
@@ -221,7 +253,8 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
       } else {
         nextProjectId = existingProject.value.id;
         nextProjectDefaultModelSelection =
-          existingProject.value.defaultModelSelection ?? getAutoBootstrapDefaultModelSelection();
+          existingProject.value.defaultModelSelection ??
+          (yield* resolveAutoBootstrapDefaultModelSelection);
       }
 
       const existingThreadId =

@@ -1,5 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { DEFAULT_MODEL, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import {
+  DEFAULT_MODEL,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+  ThreadId,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -13,8 +20,10 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import { resolveZeropsEnvironment } from "./zerops/ZeropsEnvironment.ts";
 
 it("uses the canonical Codex default for auto-bootstrapped model selection", () => {
   assert.deepStrictEqual(ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(), {
@@ -278,4 +287,193 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
     assert.strictEqual(error, uuidError);
     assert.deepStrictEqual(yield* Ref.get(dispatchCalls), []);
   }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+// --- Zerops container: the bootstrap thread opens on an authenticated provider ---
+
+const zeropsEnvironment = resolveZeropsEnvironment({
+  projectId: "nTV3oMB2SS634ImDJnQckg",
+  apiHost: undefined,
+  allowedOrigins: [],
+  membershipTtlSeconds: undefined,
+});
+
+const bootstrapSnapshotQuery = (
+  existingProject: Option.Option<{ readonly defaultModelSelection: unknown }>,
+) =>
+  ({
+    getCommandReadModel: () => Effect.die("unused"),
+    getSnapshot: () => Effect.die("unused"),
+    getShellSnapshot: () => Effect.die("unused"),
+    getArchivedShellSnapshot: () => Effect.die("unused"),
+    getSnapshotSequence: () => Effect.die("unused"),
+    getCounts: () => Effect.die("unused"),
+    getActiveProjectByWorkspaceRoot: () =>
+      Effect.succeed(
+        Option.map(existingProject, (project) => ({
+          id: ProjectId.make("project-startup-bootstrap"),
+          title: "Startup Project",
+          workspaceRoot: "/tmp/startup-project",
+          scripts: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          deletedAt: null,
+          ...project,
+        })),
+      ),
+    getProjectShellById: () => Effect.die("unused"),
+    getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+    getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+    getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+    getThreadShellById: () => Effect.die("unused"),
+    getThreadDetailById: () => Effect.die("unused"),
+    getThreadDetailSnapshot: () => Effect.die("unused"),
+    searchThreads: () => Effect.succeed({ matches: [] }),
+  }) as never;
+
+const providerSnapshot = (
+  overrides: Partial<ServerProvider> & Pick<ServerProvider, "driver">,
+): ServerProvider =>
+  ({
+    instanceId: ProviderInstanceId.make(overrides.driver),
+    displayName: overrides.driver,
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [{ slug: "model-a", name: "Model A", isCustom: false, capabilities: null }],
+    slashCommands: [],
+    skills: [],
+    ...overrides,
+  }) satisfies ServerProvider;
+
+const READY_CLAUDE = providerSnapshot({
+  driver: ProviderDriverKind.make("claudeAgent"),
+  models: [{ slug: "claude-sonnet-5", name: "Sonnet 5", isCustom: false, capabilities: null }],
+});
+
+const UNAUTHENTICATED_CODEX = providerSnapshot({
+  driver: ProviderDriverKind.make("codex"),
+  status: "error",
+  auth: { status: "unauthenticated" },
+  models: [{ slug: DEFAULT_MODEL, name: "GPT", isCustom: false, capabilities: null }],
+});
+
+const runBootstrap = (input: {
+  readonly zerops: boolean;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly existingProject?: Option.Option<{ readonly defaultModelSelection: unknown }>;
+}) =>
+  Effect.gen(function* () {
+    const dispatched = yield* Ref.make<ReadonlyArray<Record<string, unknown>>>([]);
+    yield* ServerRuntimeStartup.resolveAutoBootstrapWelcomeTargets.pipe(
+      Effect.provideService(ServerConfig.ServerConfig, {
+        cwd: "/tmp/startup-project",
+        autoBootstrapProjectFromCwd: true,
+        ...(input.zerops ? { zerops: zeropsEnvironment } : {}),
+      } as never),
+      Effect.provideService(
+        ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+        bootstrapSnapshotQuery(input.existingProject ?? Option.none()),
+      ),
+      Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Ref.update(dispatched, (calls) => [
+            ...calls,
+            command as unknown as Record<string, unknown>,
+          ]).pipe(Effect.as({ sequence: 1 })),
+        streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
+      } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
+      Effect.provideService(ProviderRegistry.ProviderRegistry, {
+        getProviders: Effect.succeed(input.providers),
+      } as never),
+      Effect.provide(NodeServices.layer),
+    );
+    return yield* Ref.get(dispatched);
+  });
+
+it.effect(
+  "auto-bootstrap on Zerops opens the first thread on the authenticated provider, not Codex",
+  () =>
+    Effect.gen(function* () {
+      const dispatched = yield* runBootstrap({
+        zerops: true,
+        providers: [UNAUTHENTICATED_CODEX, READY_CLAUDE],
+      });
+
+      const expected = {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-5",
+      };
+      assert.deepStrictEqual(
+        dispatched.map((command) => command.type),
+        ["project.create", "thread.create"],
+      );
+      assert.deepStrictEqual(dispatched[0]?.defaultModelSelection, expected);
+      assert.deepStrictEqual(dispatched[1]?.modelSelection, expected);
+    }),
+);
+
+it.effect("auto-bootstrap outside a Zerops container keeps the upstream Codex default", () =>
+  Effect.gen(function* () {
+    const dispatched = yield* runBootstrap({
+      zerops: false,
+      providers: [UNAUTHENTICATED_CODEX, READY_CLAUDE],
+    });
+
+    const expected = ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection();
+    assert.deepStrictEqual(dispatched[0]?.defaultModelSelection, expected);
+    assert.deepStrictEqual(dispatched[1]?.modelSelection, expected);
+  }),
+);
+
+it.effect("auto-bootstrap on Zerops keeps the upstream default when no provider is ready", () =>
+  Effect.gen(function* () {
+    const dispatched = yield* runBootstrap({
+      zerops: true,
+      providers: [UNAUTHENTICATED_CODEX],
+    });
+
+    const expected = ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection();
+    assert.deepStrictEqual(dispatched[0]?.defaultModelSelection, expected);
+    assert.deepStrictEqual(dispatched[1]?.modelSelection, expected);
+  }),
+);
+
+it.effect(
+  "an existing project without a stored default gets the resolved Zerops selection for its first thread",
+  () =>
+    Effect.gen(function* () {
+      const dispatched = yield* runBootstrap({
+        zerops: true,
+        providers: [UNAUTHENTICATED_CODEX, READY_CLAUDE],
+        existingProject: Option.some({ defaultModelSelection: null }),
+      });
+
+      assert.deepStrictEqual(
+        dispatched.map((command) => command.type),
+        ["thread.create"],
+      );
+      assert.deepStrictEqual(dispatched[0]?.modelSelection, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-5",
+      });
+    }),
+);
+
+it.effect("an existing project's stored default still wins on Zerops", () =>
+  Effect.gen(function* () {
+    const stored = { instanceId: ProviderInstanceId.make("codex"), model: DEFAULT_MODEL };
+    const dispatched = yield* runBootstrap({
+      zerops: true,
+      providers: [UNAUTHENTICATED_CODEX, READY_CLAUDE],
+      existingProject: Option.some({ defaultModelSelection: stored }),
+    });
+
+    assert.deepStrictEqual(dispatched[0]?.modelSelection, stored);
+  }),
 );
