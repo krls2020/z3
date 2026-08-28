@@ -16,6 +16,7 @@ import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -363,7 +364,9 @@ const UNAUTHENTICATED_CODEX = providerSnapshot({
 
 const runBootstrap = (input: {
   readonly zerops: boolean;
-  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly providers?: ReadonlyArray<ServerProvider>;
+  /** Overrides `providers` when the registry must answer differently per call. */
+  readonly getProviders?: Effect.Effect<ReadonlyArray<ServerProvider>>;
   readonly existingProject?: Option.Option<{ readonly defaultModelSelection: unknown }>;
 }) =>
   Effect.gen(function* () {
@@ -389,7 +392,7 @@ const runBootstrap = (input: {
         latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
       Effect.provideService(ProviderRegistry.ProviderRegistry, {
-        getProviders: Effect.succeed(input.providers),
+        getProviders: input.getProviders ?? Effect.succeed(input.providers ?? []),
       } as never),
       Effect.provide(NodeServices.layer),
     );
@@ -476,4 +479,130 @@ it.effect("an existing project's stored default still wins on Zerops", () =>
 
     assert.deepStrictEqual(dispatched[0]?.modelSelection, stored);
   }),
+);
+
+// --- Zerops container: the bootstrap waits for the first provider probe ---
+
+/** A provider whose very first probe has not landed yet. */
+const probing = (snapshot: ServerProvider): ServerProvider => ({
+  ...snapshot,
+  installed: false,
+  status: "warning",
+  auth: { status: "unknown" },
+});
+
+/**
+ * A registry that answers with still-probing snapshots for the first
+ * `pendingCalls` reads and settled ones after that — the shape of a real boot,
+ * where the managed snapshot is published synchronously and the CLI probe
+ * lands seconds later.
+ */
+const flippingRegistry = (input: {
+  readonly pendingCalls: number;
+  readonly pending: ReadonlyArray<ServerProvider>;
+  readonly settled: ReadonlyArray<ServerProvider>;
+}) =>
+  Effect.gen(function* () {
+    const calls = yield* Ref.make(0);
+    return {
+      calls,
+      getProviders: Ref.updateAndGet(calls, (count) => count + 1).pipe(
+        Effect.map((count) => (count > input.pendingCalls ? input.settled : input.pending)),
+      ),
+    };
+  });
+
+it.effect("auto-bootstrap on Zerops waits for the first provider probe before choosing", () =>
+  Effect.gen(function* () {
+    const registry = yield* flippingRegistry({
+      pendingCalls: 1,
+      pending: [probing(UNAUTHENTICATED_CODEX), probing(READY_CLAUDE)],
+      settled: [UNAUTHENTICATED_CODEX, READY_CLAUDE],
+    });
+
+    const fiber = yield* runBootstrap({
+      zerops: true,
+      getProviders: registry.getProviders,
+    }).pipe(Effect.forkChild);
+
+    yield* TestClock.adjust(ServerRuntimeStartup.ZEROPS_BOOTSTRAP_PROVIDER_POLL_INTERVAL);
+    const dispatched = yield* Fiber.join(fiber);
+
+    const expected = {
+      instanceId: ProviderInstanceId.make("claudeAgent"),
+      model: "claude-sonnet-5",
+    };
+    assert.deepStrictEqual(dispatched[0]?.defaultModelSelection, expected);
+    assert.deepStrictEqual(dispatched[1]?.modelSelection, expected);
+    assert.isAbove(yield* Ref.get(registry.calls), 1);
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("auto-bootstrap does not wait once every provider has settled", () =>
+  Effect.gen(function* () {
+    const registry = yield* flippingRegistry({
+      pendingCalls: 0,
+      pending: [],
+      settled: [UNAUTHENTICATED_CODEX],
+    });
+
+    // No clock is advanced: a settled registry must decide on the first read,
+    // so a container where nobody is signed in still gets its thread at once.
+    const dispatched = yield* runBootstrap({
+      zerops: true,
+      getProviders: registry.getProviders,
+    });
+
+    assert.deepStrictEqual(
+      dispatched[0]?.defaultModelSelection,
+      ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
+    );
+    assert.equal(yield* Ref.get(registry.calls), 1);
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("auto-bootstrap gives up on a provider whose probe never lands", () =>
+  Effect.gen(function* () {
+    const registry = yield* flippingRegistry({
+      pendingCalls: Number.MAX_SAFE_INTEGER,
+      pending: [probing(READY_CLAUDE)],
+      settled: [],
+    });
+
+    const fiber = yield* runBootstrap({
+      zerops: true,
+      getProviders: registry.getProviders,
+    }).pipe(Effect.forkChild);
+
+    yield* TestClock.adjust(ServerRuntimeStartup.ZEROPS_BOOTSTRAP_PROVIDER_WAIT);
+    const dispatched = yield* Fiber.join(fiber);
+
+    assert.deepStrictEqual(
+      dispatched[0]?.defaultModelSelection,
+      ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
+    );
+    // It gave up on the deadline, not on the first read.
+    assert.isAbove(yield* Ref.get(registry.calls), 1);
+  }).pipe(Effect.provide(TestClock.layer())),
+);
+
+it.effect("auto-bootstrap outside a Zerops container never reads the provider registry", () =>
+  Effect.gen(function* () {
+    const registry = yield* flippingRegistry({
+      pendingCalls: 0,
+      pending: [],
+      settled: [UNAUTHENTICATED_CODEX, READY_CLAUDE],
+    });
+
+    const dispatched = yield* runBootstrap({
+      zerops: false,
+      getProviders: registry.getProviders,
+    });
+
+    assert.deepStrictEqual(
+      dispatched[0]?.defaultModelSelection,
+      ServerRuntimeStartup.getAutoBootstrapDefaultModelSelection(),
+    );
+    assert.equal(yield* Ref.get(registry.calls), 0);
+  }).pipe(Effect.provide(TestClock.layer())),
 );

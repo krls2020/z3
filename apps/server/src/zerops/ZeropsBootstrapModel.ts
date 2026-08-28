@@ -86,6 +86,41 @@ export const resolveBootstrapModelSlug = (snapshot: ServerProvider): string => {
 };
 
 /**
+ * Is this instance's very first probe still running?
+ *
+ * A managed provider publishes its snapshot synchronously at construction with
+ * the CLI unexamined - `installed: false`, `status: "warning"` - and the real
+ * result lands seconds later on a forked fibre. The same triple is what
+ * `shouldRetainMissingProviderModels` in `Layers/ProviderRegistry.ts` calls
+ * `isPendingInitialProbe`; this is that state named for the bootstrap's use.
+ *
+ * A disabled instance is never pending: nothing is going to probe it.
+ */
+export const isProbePendingProvider = (snapshot: ServerProvider): boolean =>
+  snapshot.enabled && !snapshot.installed && snapshot.status === "warning";
+
+/**
+ * Does this registry reading carry enough truth to choose on?
+ *
+ * The bootstrap runs within a second of server start, well before the CLI
+ * probes return, so the first reading is all-pending and picking from it lands
+ * every container on the upstream fallback. The caller therefore polls until
+ * this holds (or its bound elapses).
+ *
+ * Note what is deliberately NOT an exit: "some provider is already ready".
+ * Probes finish in whatever order the CLIs happen to answer, so exiting on the
+ * first ready snapshot would hand the container Codex simply because it
+ * answered before Claude. The preference order in `pickBootstrapProvider` is
+ * only meaningful against a complete picture, so the wait ends when no enabled
+ * instance is still probing - not when the first one succeeds.
+ *
+ * An empty array is not decidable: no snapshot is not evidence of no provider,
+ * it is the registry not yet populated.
+ */
+export const isBootstrapDecidable = (providers: ReadonlyArray<ServerProvider>): boolean =>
+  providers.length > 0 && !providers.some(isProbePendingProvider);
+
+/**
  * The instance the bootstrap thread opens on, or `undefined` when none of the
  * configured instances can serve a turn.
  */

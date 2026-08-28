@@ -7,7 +7,9 @@ import {
 } from "@t3tools/contracts";
 
 import {
+  isBootstrapDecidable,
   isBootstrapReadyProvider,
+  isProbePendingProvider,
   pickBootstrapProvider,
   resolveBootstrapModelSlug,
   resolveZeropsBootstrapModelSelection,
@@ -152,5 +154,70 @@ describe("resolveZeropsBootstrapModelSelection", () => {
 
   it("returns undefined when no provider is ready", () => {
     assert.isUndefined(resolveZeropsBootstrapModelSelection([unauthenticatedCodex]));
+  });
+});
+
+/**
+ * How a provider looks while its very first probe is still running: the
+ * managed snapshot is published synchronously with the CLI unexamined, and
+ * the real result arrives seconds later on a forked fibre.
+ */
+const probingClaude = provider({
+  driver: CLAUDE,
+  installed: false,
+  status: "warning",
+  auth: { status: "unknown" },
+  message: "Claude provider status has not been checked in this session yet.",
+  models: [{ slug: "claude-sonnet-5", name: "Sonnet 5", isCustom: false, capabilities: null }],
+});
+
+const probingCodex = provider({
+  driver: CODEX,
+  installed: false,
+  status: "warning",
+  auth: { status: "unknown" },
+  message: "Codex provider status has not been checked in this session yet.",
+  models: [{ slug: DEFAULT_MODEL, name: "GPT", isCustom: false, capabilities: null }],
+});
+
+describe("isProbePendingProvider", () => {
+  it("recognises an enabled provider whose first probe has not landed", () => {
+    assert.isTrue(isProbePendingProvider(probingClaude));
+    assert.isTrue(isProbePendingProvider(probingCodex));
+  });
+
+  it("does not treat a settled provider as pending", () => {
+    assert.isFalse(isProbePendingProvider(readyClaude));
+    assert.isFalse(isProbePendingProvider(unauthenticatedCodex));
+  });
+
+  it("does not wait on a disabled provider", () => {
+    assert.isFalse(
+      isProbePendingProvider(
+        provider({ driver: CLAUDE, enabled: false, installed: false, status: "warning" }),
+      ),
+    );
+  });
+});
+
+describe("isBootstrapDecidable", () => {
+  it("is not decidable while any enabled provider is still probing", () => {
+    assert.isFalse(isBootstrapDecidable([probingClaude, probingCodex]));
+  });
+
+  it("is not decidable on an empty registry — no snapshot is not evidence", () => {
+    assert.isFalse(isBootstrapDecidable([]));
+  });
+
+  it("waits for a probing Claude even when Codex has already settled ready", () => {
+    // The preference order is only meaningful against a complete picture; an
+    // early exit here would hand the container Codex purely because its probe
+    // returned first.
+    assert.isFalse(isBootstrapDecidable([probingClaude, readyCodex]));
+  });
+
+  it("is decidable once every enabled provider has settled", () => {
+    assert.isTrue(isBootstrapDecidable([unauthenticatedCodex, readyClaude]));
+    assert.isTrue(isBootstrapDecidable([unauthenticatedCodex]));
   });
 });
