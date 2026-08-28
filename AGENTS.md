@@ -1,3 +1,10 @@
+> **This is `z3`, a Zerops hard fork of T3 Code.** Read [`CLAUDE.md`](CLAUDE.md) and
+> [`docs/internals/zerops/fork.md`](docs/internals/zerops/fork.md) first. Two rules override
+> upstream's guide below: never `git merge`/`rebase upstream/main` — the fork is frozen at tag
+> `upstream-base-2026-08-28`; in the ported zone (`apps/server/src/provider/**`, provider
+> contracts) keep edits minimal so future ports stay cheap. Where the two disagree about product
+> name or scope, the rules above win.
+
 # T3 Code
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs (Codex, Claude Code, Cursor, Grok, OpenCode) and serves web, desktop, and mobile clients.
