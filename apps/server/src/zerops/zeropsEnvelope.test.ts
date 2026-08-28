@@ -5,7 +5,7 @@ import {
   decodeZeropsEnvelope,
   extractZeropsEnvelope,
   extractZeropsEnvelopeBlock,
-} from "./envelope.ts";
+} from "./zeropsEnvelope.ts";
 
 /**
  * The wire shape zcp's `workflow.AppendEnvelope` produces: markdown, a blank
@@ -156,7 +156,7 @@ describe("decodeZeropsEnvelope", () => {
   });
 });
 
-describe("extractZeropsEnvelope", () => {
+describe("extractZeropsEnvelope — the fenced-block carrier", () => {
   it("reads the envelope out of a rendered tool result", () => {
     expect(extractZeropsEnvelope(resultText())?.phase).toBe("develop-active");
   });
@@ -175,5 +175,52 @@ describe("extractZeropsEnvelope", () => {
     ["an unterminated block", `text\n\n${"```"}${ZEROPS_ENVELOPE_FENCE}\n{"phase":"idle"}\n`],
   ])("returns undefined for %s", (_label, text) => {
     expect(extractZeropsEnvelope(text)).toBeUndefined();
+  });
+});
+
+describe("extractZeropsEnvelope — the JSON-document carrier", () => {
+  const jsonResult = (extra: Record<string, unknown>) =>
+    JSON.stringify({ service: "kanbandev", status: "ok", ...extra });
+
+  it("reads a top-level envelope key out of a JSON result", () => {
+    // zerops_deploy / verify / import / mount return one JSON document, which a
+    // markdown fence cannot be appended to without breaking the parse, so those
+    // carry the envelope as a field instead.
+    const text = jsonResult({ envelope: JSON.parse(envelopeJson()) as unknown });
+    expect(extractZeropsEnvelope(text)?.phase).toBe("develop-active");
+    expect(extractZeropsEnvelope(text)?.services).toHaveLength(2);
+  });
+
+  it("returns undefined for a JSON result with no envelope key", () => {
+    expect(extractZeropsEnvelope(jsonResult({}))).toBeUndefined();
+  });
+
+  it("returns undefined when the envelope key holds something that is not one", () => {
+    expect(extractZeropsEnvelope(jsonResult({ envelope: "not an envelope" }))).toBeUndefined();
+    expect(extractZeropsEnvelope(jsonResult({ envelope: null }))).toBeUndefined();
+  });
+
+  it("does not read a fenced block quoted inside a JSON document", () => {
+    // A JSON result can carry agent prose in a field — logs, a rendered error —
+    // and that prose can quote this very format. A document that parses as JSON
+    // is the carrier, and its `envelope` key is the only answer; falling through
+    // to the fence rule would let quoted text become state.
+    const text = jsonResult({ logs: `\n${block(envelopeJson())}` });
+    expect(extractZeropsEnvelope(text)).toBeUndefined();
+  });
+
+  it("still prefers the envelope key when the document also quotes a block", () => {
+    const text = jsonResult({
+      envelope: JSON.parse(envelopeJson({ phase: "idle" })) as unknown,
+      logs: block(envelopeJson({ phase: "develop-active" })),
+    });
+    expect(extractZeropsEnvelope(text)?.phase).toBe("idle");
+  });
+
+  it("falls back to the fence rule for text that is not a JSON document", () => {
+    expect(extractZeropsEnvelope(resultText())?.phase).toBe("develop-active");
+    expect(extractZeropsEnvelope(`[1,2,3]\n\n${block(envelopeJson())}`)?.phase).toBe(
+      "develop-active",
+    );
   });
 });

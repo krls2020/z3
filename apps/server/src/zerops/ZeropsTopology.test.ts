@@ -9,7 +9,7 @@ import type { ProviderRuntimeEvent } from "@t3tools/contracts";
 
 import { ZeropsCliFailed, ZeropsCliNotFound, type ZeropsCli } from "./ZeropsCli.ts";
 import * as ZeropsTopology from "./ZeropsTopology.ts";
-import type { ZeropsTopologyRead } from "./topologyParse.ts";
+import type { ZeropsTopologyRead } from "./zeropsTopologyParse.ts";
 
 const read = (hostnames: ReadonlyArray<string>, status = "ACTIVE"): ZeropsTopologyRead => ({
   project: { id: "proj-1", name: "z3-eval" },
@@ -80,6 +80,7 @@ describe("ZeropsTopology", () => {
         const topology = yield* ZeropsTopology.make({
           cli: fake.service,
           toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
         });
         const snapshot = yield* topology.latest;
         expect(snapshot.available).toBe(true);
@@ -99,6 +100,7 @@ describe("ZeropsTopology", () => {
         const topology = yield* ZeropsTopology.make({
           cli: fake.service,
           toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
         });
         const subscription = yield* topology.subscribe;
         expect(subscription.latest.services).toHaveLength(1);
@@ -118,6 +120,31 @@ describe("ZeropsTopology", () => {
     ),
   );
 
+  it.effect("never touches zcp outside a Zerops environment", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli(() => Effect.succeed(read(["kanbandev"])));
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: noToolEvents,
+          isZeropsEnvironment: false,
+        });
+
+        const snapshot = yield* topology.latest;
+        expect(snapshot.available).toBe(false);
+        expect(snapshot.degraded).toBe(false);
+        expect(snapshot.reason).toContain("Zerops");
+
+        // Not one spawn: a laptop running T3 has no project to read, so probing
+        // for a binary there is work with no possible answer.
+        expect(yield* Ref.get(fake.reads)).toBe(0);
+        expect(yield* Ref.get(fake.watchStarts)).toBe(0);
+        yield* topology.refresh;
+        expect(yield* Ref.get(fake.reads)).toBe(0);
+      }),
+    ),
+  );
+
   it.effect("switches the feed off when zcp is not installed", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -127,6 +154,7 @@ describe("ZeropsTopology", () => {
         const topology = yield* ZeropsTopology.make({
           cli: fake.service,
           toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
         });
         const snapshot = yield* topology.latest;
         expect(snapshot.available).toBe(false);
@@ -154,6 +182,7 @@ describe("ZeropsTopology", () => {
         const topology = yield* ZeropsTopology.make({
           cli: fake.service,
           toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
         });
         const snapshot = yield* topology.refresh;
         expect(snapshot.available).toBe(true);
@@ -177,6 +206,7 @@ describe("ZeropsTopology", () => {
         const topology = yield* ZeropsTopology.make({
           cli: fake.service,
           toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
         });
         yield* topology.refresh;
         const recovered = yield* topology.refresh;
@@ -195,6 +225,7 @@ describe("ZeropsTopology", () => {
         const topology = yield* ZeropsTopology.make({
           cli: fake.service,
           toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
         });
         const subscription = yield* topology.subscribe;
         const firstPublished = yield* Stream.runHead(subscription.changes).pipe(Effect.forkChild);

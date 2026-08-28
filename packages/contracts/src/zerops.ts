@@ -258,9 +258,10 @@ export type ZeropsToolStatus = typeof ZeropsToolStatus.Type;
 /**
  * One `zerops_*` tool call, for the strip's "last action".
  *
- * Recorded for EVERY Zerops tool, not only the three that carry an envelope
- * (zcp `docs/spec-z3.md` §1.3) — without it the strip could not say
- * "deploying", because `zerops_deploy` returns JSON and carries no state.
+ * Recorded for EVERY Zerops tool, whether or not it carries an envelope. The
+ * envelope says where the agent IS; it cannot say what is happening right now —
+ * a tool still running has no result yet, and a failed one carries no envelope
+ * by design — and the strip still has to be able to read "deploying".
  * This is a log, not a state machine: the envelope stays the state.
  */
 export const ZeropsRecentTool = Schema.Struct({
