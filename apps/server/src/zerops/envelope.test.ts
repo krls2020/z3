@@ -84,8 +84,14 @@ describe("extractZeropsEnvelopeBlock", () => {
   });
 
   it("tolerates trailing whitespace and CRLF around the fences", () => {
-    const text =
-      `intro\r\n\r\n\`\`\`${ZEROPS_ENVELOPE_FENCE}  \r\n` + `${envelopeJson()}\r\n\`\`\`  \r\n\r\n`;
+    const text = [
+      "intro",
+      "",
+      `\`\`\`${ZEROPS_ENVELOPE_FENCE}  `,
+      envelopeJson(),
+      "```  ",
+      "",
+    ].join("\r\n");
     expect(extractZeropsEnvelopeBlock(text)).toBe(envelopeJson());
   });
 
