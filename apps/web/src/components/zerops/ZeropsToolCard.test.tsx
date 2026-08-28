@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ZeropsActivityResult } from "../../zerops/activityResult";
 import { readZeropsCardSource } from "../../zerops/cards/decode";
 import { decodeZeropsCard } from "../../zerops/cards/payloads";
+import { LIVE_DEPLOY_ERROR_RESULT } from "../../zerops/cards/liveFixtures";
 import { ZeropsToolCard } from "./ZeropsToolCard";
 
 /** The whole path a timeline row takes: result text → payload → markup. */
@@ -139,5 +140,31 @@ describe("ZeropsToolCard", () => {
     expect(render("zerops_deploy", { unrelated: true })).toBe("");
     expect(render("zerops_logs", { lines: ["hello"] })).toBe("");
     expect(render("zerops_deploy", [1, 2, 3])).toBe("");
+  });
+});
+
+/**
+ * Captured from a live container: a failed zerops_deploy whose `error` embeds
+ * five lines of zcli log output.
+ */
+describe("ZeropsToolCard — a real error payload", () => {
+  const html = () => render("zerops_deploy", JSON.parse(LIVE_DEPLOY_ERROR_RESULT) as unknown, true);
+
+  it("shows the code, the suggestion and the classification", () => {
+    expect(html()).toContain("SSH_DEPLOY_FAILED");
+    expect(html()).toContain("Check the diagnostic field for full command output.");
+    expect(html()).toContain("network");
+  });
+
+  /** Without this the five log lines render as one run-on sentence. */
+  it("preserves the message's line breaks and bounds its height", () => {
+    expect(html()).toContain("whitespace-pre-wrap");
+    expect(html()).toContain("max-h-40");
+    expect(html()).toContain("overflow-y-auto");
+  });
+
+  /** `diagnostic` is 2 KB of duplicate log output; the card never shows it. */
+  it("leaves the diagnostic blob out of the card", () => {
+    expect(html()).not.toContain(".zcli.yml");
   });
 });

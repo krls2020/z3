@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import type { ZeropsActivityResult } from "../activityResult";
 import { readZeropsCardSource } from "./decode";
+import { LIVE_DEPLOY_ERROR_RESULT, LIVE_VERIFY_RESULT } from "./liveFixtures";
 import { decodeZeropsCard } from "./payloads";
 
 const result = (toolName: string, body: unknown): ZeropsActivityResult => ({
@@ -317,5 +318,82 @@ describe("decodeZeropsCard — degrading", () => {
       decodeZeropsCard(readZeropsCardSource({ toolName: "zerops_deploy", truncated: true })),
     ).toBeUndefined();
     expect(decodeZeropsCard(readZeropsCardSource(undefined))).toBeUndefined();
+  });
+});
+
+/**
+ * The decoders against results captured from a live container, byte-exact.
+ *
+ * The constructed fixtures above are built from zcp's Go structs and prove the
+ * rules; these prove the rules were read off the right thing. They caught two
+ * differences from what the structs suggested — see the assertions.
+ */
+describe("decodeZeropsCard — live payloads", () => {
+  it("reads a real zerops_verify result", () => {
+    const decoded = decodeZeropsCard(
+      readZeropsCardSource({ toolName: "zerops_verify", resultText: LIVE_VERIFY_RESULT }),
+    );
+
+    expect(decoded).toEqual({
+      kind: "verify",
+      hostname: "s3git1",
+      status: "healthy",
+      checks: [
+        { name: "service_running", status: "pass" },
+        { name: "error_logs", status: "pass" },
+      ],
+    });
+  });
+
+  /**
+   * The live document carries `workSessionState` and a top-level `envelope`
+   * beside the VerifyResult fields. Both are ignored — the envelope reaches the
+   * client through the lifecycle feed, and a card that also read it could
+   * disagree with the strip about the same state.
+   */
+  it("ignores the envelope and workSessionState riding along with it", () => {
+    const document = JSON.parse(LIVE_VERIFY_RESULT) as Record<string, unknown>;
+
+    expect(document.envelope).toBeDefined();
+    expect(document.workSessionState).toBeDefined();
+    expect(
+      decodeZeropsCard(
+        readZeropsCardSource({ toolName: "zerops_verify", resultText: LIVE_VERIFY_RESULT }),
+      ),
+    ).not.toHaveProperty("envelope");
+  });
+
+  it("reads a real failed zerops_deploy as the error card", () => {
+    const decoded = decodeZeropsCard(
+      readZeropsCardSource(
+        { toolName: "zerops_deploy", resultText: LIVE_DEPLOY_ERROR_RESULT },
+        { failed: true },
+      ),
+    );
+
+    expect(decoded?.kind).toBe("error");
+    expect(decoded).toMatchObject({
+      code: "SSH_DEPLOY_FAILED",
+      suggestion: "Check the diagnostic field for full command output.",
+      failureClass: "network",
+      checks: [],
+    });
+  });
+
+  /**
+   * A real error `message` is MULTI-LINE — zcli's log output is embedded in it.
+   * The card has to preserve those newlines; collapsing them runs five log
+   * lines into one unreadable sentence.
+   */
+  it("carries the error message with its line breaks intact", () => {
+    const decoded = decodeZeropsCard(
+      readZeropsCardSource(
+        { toolName: "zerops_deploy", resultText: LIVE_DEPLOY_ERROR_RESULT },
+        { failed: true },
+      ),
+    );
+
+    expect(decoded?.kind === "error" && decoded.message).toContain("\n");
+    expect(decoded?.kind === "error" && decoded.message.split("\n").length).toBeGreaterThan(4);
   });
 });
