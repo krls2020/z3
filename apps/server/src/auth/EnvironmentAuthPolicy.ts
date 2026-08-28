@@ -45,7 +45,14 @@ export const make = Effect.gen(function* () {
   const descriptor: ServerAuthDescriptor = {
     policy,
     bootstrapMethods,
-    sessionMethods: ["browser-session-cookie", "bearer-access-token", "dpop-access-token"],
+    // A cookie is the one credential a browser attaches to a cross-origin
+    // request by itself. Inside a Zerops project this server is published on
+    // the public internet, so it issues none: the hosted client is bearer or
+    // DPoP only, and CSRF stops being a category of bug rather than a thing to
+    // defend against.
+    sessionMethods: isZerops
+      ? ["bearer-access-token", "dpop-access-token"]
+      : ["browser-session-cookie", "bearer-access-token", "dpop-access-token"],
     sessionCookieName: resolveSessionCookieName({
       mode: config.mode,
       port: config.port,

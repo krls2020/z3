@@ -3617,6 +3617,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("refuses to open a cookie session inside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const response = yield* HttpClient.post("/api/auth/browser-session", {
+        body: yield* HttpBody.json({ credential: defaultDesktopBootstrapToken }),
+      });
+      const body = yield* responseJsonEffect<{
+        readonly code?: string;
+        readonly reason?: string;
+      }>(response);
+
+      // A cookie is the one credential a browser attaches on its own, so the
+      // Zerops door does not issue any. The credential itself is never even
+      // consumed.
+      assert.equal(response.status, 403);
+      assert.equal(body.code, "operation_forbidden");
+      assert.equal(body.reason, "browser_session_unsupported");
+      assert.equal(response.headers["set-cookie"], undefined);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("stops answering a foreign origin with a wildcard inside a Zerops project", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
