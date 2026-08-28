@@ -105,8 +105,8 @@ const readCodexShape = (data: Record<string, unknown>): ZeropsToolCall | undefin
 };
 
 /**
- * The `zerops_*` tool call this item event describes, or undefined when it is
- * not one.
+ * The `zerops_*` tool call an item payload's `data` describes, or undefined
+ * when it is not one.
  *
  * The gate is the TOOL NAME, never `payload.itemType`. Claude's
  * `classifyToolItemType` (`ClaudeAdapter.ts:736-771`) is an ordered substring
@@ -114,12 +114,16 @@ const readCodexShape = (data: Record<string, unknown>): ZeropsToolCall | undefin
  * arrives typed `file_change`; an `itemType` gate would drop it, and every
  * future zerops tool whose name happens to contain create/edit/write/file.
  */
+export const readZeropsToolCallData = (data: unknown): ZeropsToolCall | undefined =>
+  isRecord(data) ? (readClaudeShape(data) ?? readCodexShape(data)) : undefined;
+
+/**
+ * The `zerops_*` tool call this item event describes, or undefined when it is
+ * not one. Adds what only the event knows: an item the provider marked failed
+ * is failed even when the result block does not say so.
+ */
 export const readZeropsToolCall = (payload: ItemLifecyclePayload): ZeropsToolCall | undefined => {
-  const data: unknown = payload.data;
-  if (!isRecord(data)) {
-    return undefined;
-  }
-  const call = readClaudeShape(data) ?? readCodexShape(data);
+  const call = readZeropsToolCallData(payload.data);
   if (call === undefined) {
     return undefined;
   }

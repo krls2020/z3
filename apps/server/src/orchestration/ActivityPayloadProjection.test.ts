@@ -207,3 +207,125 @@ describe("projectActivityPayload", () => {
     expect(projected.payload).toEqual(source.payload);
   });
 });
+
+/**
+ * Zerops results survive the slimming pass — the enabling seam for the Zerops
+ * cards in the web client.
+ *
+ * The pass drops `result` from every MCP item and replaces it with the first
+ * line capped at 84 characters, on the live path AND the history snapshot. That
+ * is right for tool output in general and fatal for a `zerops_*` result, which
+ * IS a JSON document the client renders a card from. So a bounded copy of the
+ * text rides alongside, for `zerops_*` tools only.
+ *
+ * Plan: `../zcp/plans/z3-s6-ui-plan-2026-08-28.md` D-U1.
+ */
+describe("projectActivityPayload — zerops results", () => {
+  const zeropsDeployText = JSON.stringify({
+    status: "DEPLOYED",
+    targetService: "kanbandev",
+    subdomainUrl: "https://kanbandev-abc.prg1.zerops.app",
+  });
+
+  it("carries a zerops tool result verbatim while still slimming the item", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          item: {
+            type: "mcpToolCall",
+            server: "zerops",
+            tool: "zerops_deploy",
+            status: "completed",
+            result: { content: [{ type: "text", text: zeropsDeployText }] },
+          },
+        },
+      }),
+    );
+
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const zerops = data.zerops as Record<string, unknown>;
+    expect(zerops.toolName).toBe("zerops_deploy");
+    expect(zerops.resultText).toBe(zeropsDeployText);
+
+    // The existing slimming is untouched: the item's own result stays summarized.
+    const item = data.item as Record<string, unknown>;
+    const summarized = item.result as Record<string, unknown>;
+    expect(summarized.content).not.toBe(zeropsDeployText);
+  });
+
+  /**
+   * Claude emits `data = {toolName, input, result}` with no `item`, and the
+   * client only reads `data.item` — so without this the browser sees NOTHING of
+   * a Claude zerops call, not even the 84-character teaser.
+   */
+  it("carries a Claude-shaped zerops result, which has no item at all", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "mcp_tool_call",
+        data: {
+          toolName: "mcp__zerops__zerops_verify",
+          input: { hostname: "kanbandev" },
+          result: {
+            type: "tool_result",
+            tool_use_id: "toolu_01",
+            content: [{ type: "text", text: '{"status":"healthy"}' }],
+          },
+        },
+      }),
+    );
+
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const zerops = data.zerops as Record<string, unknown>;
+    expect(zerops.toolName).toBe("zerops_verify");
+    expect(zerops.resultText).toBe('{"status":"healthy"}');
+  });
+
+  /**
+   * `classifyToolItemType` tests `…delete…` before `…mcp…`, so this call is
+   * typed `file_change` and takes the NON-mcp branch of the projection. The
+   * hook therefore sits in `projectActivityPayload` itself, not in the mcp one.
+   */
+  it("carries a zerops result whose itemType Claude misclassified", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "file_change",
+        data: {
+          toolName: "mcp__zerops__zerops_delete",
+          input: { hostname: "gone" },
+          result: {
+            type: "tool_result",
+            tool_use_id: "toolu_02",
+            content: [{ type: "text", text: '{"status":"DELETED"}' }],
+          },
+        },
+      }),
+    );
+
+    const data = (projected.payload as Record<string, unknown>).data as Record<string, unknown>;
+    const zerops = data.zerops as Record<string, unknown>;
+    expect(zerops.toolName).toBe("zerops_delete");
+    expect(zerops.resultText).toBe('{"status":"DELETED"}');
+  });
+
+  it("leaves a non-zerops MCP item exactly as it was", () => {
+    const payloadOf = (a: OrchestrationThreadActivity): Record<string, unknown> =>
+      a.payload as Record<string, unknown>;
+    const input = activity({
+      itemType: "mcp_tool_call",
+      data: {
+        item: {
+          type: "mcpToolCall",
+          server: "linear",
+          tool: "create_issue",
+          status: "completed",
+          result: { content: [{ type: "text", text: "issue created" }] },
+        },
+      },
+    });
+
+    const data = payloadOf(projectActivityPayload(input)).data as Record<string, unknown>;
+    expect(data.zerops).toBeUndefined();
+    expect((data.item as Record<string, unknown>).tool).toBe("create_issue");
+  });
+});
