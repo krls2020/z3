@@ -15,6 +15,7 @@ export {
   type ZeropsLoginResponse,
   type ZeropsOrganization,
   type ZeropsProject,
+  type ZeropsRegistrationResponse,
   type ZeropsService,
   type ZeropsServicePort,
   type ZeropsSession,
@@ -34,3 +35,9 @@ export {
   type ZeropsSelection,
   type ZeropsStorageAdapter,
 } from "./session.ts";
+
+export {
+  buildZeropsRegistrationBody,
+  type ZeropsRegistrationBody,
+  type ZeropsRegistrationInput,
+} from "./registration.ts";

@@ -200,6 +200,31 @@ describe("ZeropsApiClient authentication", () => {
     expect(cleared).toEqual([null]);
   });
 
+  it("surfaces the platform's own message for a rejected sign-in", async () => {
+    // Live shape, 2026-08-28: a bad sign-in is 400 `userNotFound`, never a 401,
+    // so the client must not dress it up as an expired session.
+    const stub = recordingFetch(() =>
+      jsonResponse(400, {
+        error: {
+          code: "userNotFound",
+          message: "User not found.",
+          meta: [{ error: "User not found.", code: "userNotFound", metadata: null }],
+        },
+      }),
+    );
+    const client = new ZeropsApiClient({ fetch: stub.fetch });
+
+    const error = await client
+      .login("nobody@example.invalid", "wrong")
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ZeropsApiError);
+    expect((error as ZeropsApiError).message).toBe("User not found.");
+    expect((error as ZeropsApiError).code).toBe("userNotFound");
+    expect((error as ZeropsApiError).status).toBe(400);
+    expect(client.session).toBeNull();
+  });
+
   it("signals TOTP from twoFAMethods and posts the code to /2fa/totp/login", async () => {
     const stub = recordingFetch((request) => {
       if (request.url.endsWith("/auth/login")) {

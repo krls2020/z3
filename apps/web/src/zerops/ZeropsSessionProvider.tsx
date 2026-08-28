@@ -18,6 +18,8 @@ import {
   saveZeropsSession,
   zeropsClientsFromUser,
   type ZeropsOrganization,
+  type ZeropsRegistrationInput,
+  type ZeropsRegistrationResponse,
   type ZeropsSession,
   type ZeropsStorageAdapter,
   type ZeropsUser,
@@ -34,6 +36,7 @@ export interface ZeropsSessionValue {
   readonly user: ZeropsUser | null;
   readonly organizations: ReadonlyArray<ZeropsOrganization>;
   readonly signIn: (email: string, password: string) => Promise<void>;
+  readonly register: (input: ZeropsRegistrationInput) => Promise<ZeropsRegistrationResponse>;
   readonly verifyTotp: (code: string) => Promise<void>;
   readonly signOut: () => Promise<void>;
 }
@@ -115,6 +118,12 @@ export function ZeropsSessionProvider({
         }
         setUser(response.user ?? (await client.fetchUser()));
         setStatus("signed-in");
+      },
+      register: async (input) => {
+        const response = await client.register(input);
+        setUser(response.user ?? (await client.fetchUser()));
+        setStatus("signed-in");
+        return response;
       },
       verifyTotp: async (code) => {
         await client.verifyTotp(code);

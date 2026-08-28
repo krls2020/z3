@@ -12,6 +12,8 @@
  * persisted server-side.
  */
 
+import { buildZeropsRegistrationBody, type ZeropsRegistrationInput } from "./registration.ts";
+
 export const DEFAULT_ZEROPS_API_BASE = "https://api.app-prg1.zerops.io";
 
 const PUBLIC_API_PREFIX = "/api/rest/public";
@@ -88,6 +90,17 @@ export interface ZeropsService {
     readonly serviceStackTypeVersionName?: string;
     readonly serviceStackTypeCategory?: string;
   };
+}
+
+export interface ZeropsRegistrationResponse {
+  readonly auth: ZeropsSession;
+  readonly user: ZeropsUser | null;
+  /**
+   * Whether the pool handed this account a ready project. `false` means the
+   * pool is exhausted and the account has to create one — a fact about the
+   * platform's stock, never an error.
+   */
+  readonly zcpClaimed?: boolean;
 }
 
 export interface ZeropsLoginResponse {
@@ -252,7 +265,6 @@ export interface ZeropsApiClientOptions {
 interface RequestOptions {
   readonly authenticated?: boolean;
   readonly retryAfterRefresh?: boolean;
-  readonly unauthorizedMessage?: string;
 }
 
 export interface ListProjectsOptions {
@@ -297,15 +309,25 @@ export class ZeropsApiClient {
     await this.#setSession(null);
   }
 
+  /** `POST /registration` — signs up and returns an immediately usable session. */
+  async register(input: ZeropsRegistrationInput): Promise<ZeropsRegistrationResponse> {
+    const response = await this.#request<ZeropsRegistrationResponse>(
+      "/registration",
+      { method: "POST", body: JSON.stringify(buildZeropsRegistrationBody(input)) },
+      { authenticated: false, retryAfterRefresh: false },
+    );
+    if (!isZeropsSession(response.auth)) {
+      throw new ZeropsApiError("Zerops returned an invalid sign-up session.", "unexpected");
+    }
+    await this.#setSession(response.auth);
+    return response;
+  }
+
   async login(email: string, password: string): Promise<ZeropsLoginResponse> {
     const response = await this.#request<ZeropsLoginResponse>(
       "/auth/login",
       { method: "POST", body: JSON.stringify({ email: email.trim(), password }) },
-      {
-        authenticated: false,
-        retryAfterRefresh: false,
-        unauthorizedMessage: "Email or password is incorrect.",
-      },
+      { authenticated: false, retryAfterRefresh: false },
     );
     if (!isZeropsSession(response.auth)) {
       throw new ZeropsApiError("Zerops returned an invalid sign-in session.", "unexpected");
@@ -329,10 +351,7 @@ export class ZeropsApiClient {
     }>(
       "/2fa/totp/login",
       { method: "POST", body: JSON.stringify({ token: code.trim() }) },
-      {
-        retryAfterRefresh: false,
-        unauthorizedMessage: "The two-factor code was not accepted.",
-      },
+      { retryAfterRefresh: false },
     );
     const session = response.newRecoveryToken
       ? { ...response.auth, newRecoveryToken: response.newRecoveryToken }
@@ -505,11 +524,7 @@ export class ZeropsApiClient {
     }
 
     if (!response.ok) {
-      const error = await apiErrorFromResponse(response);
-      if (response.status === 401 && options.unauthorizedMessage) {
-        throw new ZeropsApiError(options.unauthorizedMessage, error.kind, error.status, error.code);
-      }
-      throw error;
+      throw await apiErrorFromResponse(response);
     }
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
