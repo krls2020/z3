@@ -47,6 +47,7 @@ import {
 } from "@t3tools/shared/sourceControl";
 
 import { GitManagerError, GitPullRequestMaterializationError } from "@t3tools/contracts";
+import { REFUSED_STACKED_ACTION_DETAIL, zeropsPolicy } from "../zerops/ZeropsPolicy.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import {
   conventionalCommitsTextGenerationPolicy,
@@ -1828,8 +1829,13 @@ export const make = Effect.gen(function* () {
   const remoteStatus: GitManager["Service"]["remoteStatus"] = Effect.fn("remoteStatus")(
     function* (input, options) {
       const cacheKey = yield* normalizeStatusCacheKey(input.cwd);
-      if (options?.refreshUpstream === false) {
-        return yield* readRemoteStatus(cacheKey, options);
+      // Remotes are zcp's on Zerops, so a poll must never fetch: the refusal
+      // sits here rather than at the poller because every remote-status caller
+      // funnels through this one method.
+      const refreshUpstream =
+        options?.refreshUpstream !== false && (yield* zeropsPolicy).upstreamRefreshAllowed;
+      if (!refreshUpstream) {
+        return yield* readRemoteStatus(cacheKey, { ...options, refreshUpstream: false });
       }
       return yield* Cache.get(remoteStatusResultCache, cacheKey);
     },
@@ -2178,6 +2184,16 @@ export const make = Effect.gen(function* () {
 
   const runStackedAction: GitManager["Service"]["runStackedAction"] = Effect.fn("runStackedAction")(
     function* (input, options) {
+      // Hiding the control is presentation; this is the enforcement. Two
+      // programs committing and pushing the same repository with different
+      // identities is the failure the policy exists to prevent.
+      if (!(yield* zeropsPolicy).stackedVcsActionsAllowed) {
+        return yield* new GitManagerError({
+          operation: "runStackedAction",
+          cwd: input.cwd,
+          detail: REFUSED_STACKED_ACTION_DETAIL,
+        });
+      }
       const progress = yield* createProgressEmitter(input, options);
       const currentPhase = yield* Ref.make<Option.Option<GitActionProgressPhase>>(Option.none());
 

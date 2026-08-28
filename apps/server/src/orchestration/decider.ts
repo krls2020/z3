@@ -21,6 +21,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import { zeropsPolicy } from "../zerops/ZeropsPolicy.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -289,7 +290,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { defaultModelSelection: command.defaultModelSelection }
             : {}),
           ...(command.defaultThreadEnvMode !== undefined
-            ? { defaultThreadEnvMode: command.defaultThreadEnvMode }
+            ? {
+                defaultThreadEnvMode: (yield* zeropsPolicy).worktreesAllowed
+                  ? command.defaultThreadEnvMode
+                  : "local",
+              }
             : {}),
           ...(command.faviconPath !== undefined ? { faviconPath: command.faviconPath } : {}),
           ...(command.scripts !== undefined ? { scripts: command.scripts } : {}),
@@ -376,7 +381,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
           branch: command.branch,
-          worktreePath: command.worktreePath,
+          worktreePath: (yield* zeropsPolicy).worktreesAllowed ? command.worktreePath : null,
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -846,7 +851,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { modelSelection: command.modelSelection }
             : {}),
           ...(branch !== undefined ? { branch } : {}),
-          ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
+          ...(command.worktreePath !== undefined
+            ? {
+                worktreePath: (yield* zeropsPolicy).worktreesAllowed ? command.worktreePath : null,
+              }
+            : {}),
           ...(command.linkedPullRequest !== undefined
             ? { linkedPullRequest: command.linkedPullRequest }
             : {}),

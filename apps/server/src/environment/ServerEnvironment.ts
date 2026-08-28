@@ -2,6 +2,7 @@ import {
   EnvironmentId,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   type ExecutionEnvironmentDescriptor,
+  type ServerSelfUpdateCapability,
 } from "@t3tools/contracts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Context from "effect/Context";
@@ -20,6 +21,7 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
+import { type ZeropsPolicy, zeropsPolicy } from "../zerops/ZeropsPolicy.ts";
 
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
@@ -67,6 +69,36 @@ function platformArch(
       return "other";
   }
 }
+
+/**
+ * The capability set this server advertises.
+ *
+ * Both git-pipeline capabilities key off the same rule: on Zerops zcp owns
+ * commit, push and the remote, so the client hides its own controls rather
+ * than offering a button that the server-side refusal would answer.
+ */
+export const makeServerEnvironmentCapabilities = (
+  policy: ZeropsPolicy,
+  options?: { readonly serverSelfUpdate?: ServerSelfUpdateCapability | null },
+): ExecutionEnvironmentDescriptor["capabilities"] => {
+  const serverSelfUpdate = options?.serverSelfUpdate ?? null;
+  return {
+    repositoryIdentity: true,
+    connectionProbe: true,
+    attachmentUploads: true,
+    fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
+    pullRequests: policy.stackedVcsActionsAllowed,
+    vcsStackedActions: policy.stackedVcsActionsAllowed,
+    threadSettlement: true,
+    threadSnooze: true,
+    threadPinning: true,
+    threadPinReorder: true,
+    threadTitleRegeneration: true,
+    threadPullRequestLinking: true,
+    ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
+    ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
+  };
+};
 
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -148,21 +180,7 @@ export const make = Effect.gen(function* () {
     },
     serverVersion: packageJson.version,
     ...(serverConfig.basePath === "" ? {} : { basePath: serverConfig.basePath }),
-    capabilities: {
-      repositoryIdentity: true,
-      connectionProbe: true,
-      attachmentUploads: true,
-      fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
-      pullRequests: true,
-      threadSettlement: true,
-      threadSnooze: true,
-      threadPinning: true,
-      threadPinReorder: true,
-      threadTitleRegeneration: true,
-      threadPullRequestLinking: true,
-      ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
-      ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
-    },
+    capabilities: makeServerEnvironmentCapabilities(yield* zeropsPolicy, { serverSelfUpdate }),
   };
 
   return ServerEnvironment.of({

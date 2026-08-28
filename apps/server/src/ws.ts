@@ -148,6 +148,7 @@ import { makeZeropsOriginAllowlist } from "./zerops/origin.ts";
 import { runExecCommand } from "./zerops/ExecService.ts";
 import * as ProcessRunner from "./processRunner.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
+import { zeropsPolicy } from "./zerops/ZeropsPolicy.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -901,10 +902,17 @@ const makeWsRpcLayer = (
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
+          // The decider already refuses to persist a worktree path on Zerops;
+          // this is what stops the worktree from being created on the dev
+          // service in the first place, and stops a setup script running in a
+          // directory that will never exist.
+          const worktreesAllowed = (yield* zeropsPolicy).worktreesAllowed;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
-          let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+          let targetWorktreePath = worktreesAllowed
+            ? (bootstrap?.createThread?.worktreePath ?? null)
+            : null;
 
           const cleanupCreatedThread = () =>
             createdThread
@@ -1053,7 +1061,7 @@ const makeWsRpcLayer = (
               createdThread = true;
             }
 
-            if (bootstrap?.prepareWorktree) {
+            if (bootstrap?.prepareWorktree && worktreesAllowed) {
               let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
               // "Start from origin" is a stored default; repos without an
               // origin remote fall back to the local base branch instead of
