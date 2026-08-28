@@ -274,3 +274,34 @@ describe("buildZeropsServiceMap", () => {
     expect(view?.groups[0]?.rows[0]?.production).toEqual([]);
   });
 });
+
+/**
+ * `doorbellConnected` says how the map is being kept current. The three states
+ * are deliberately distinct and none of them is an error.
+ */
+describe("buildZeropsServiceMap — liveness", () => {
+  it("reads a healthy doorbell as live", () => {
+    const view = buildZeropsServiceMap(
+      topology(realServices, { doorbellConnected: true } as Partial<ZeropsTopologySnapshot>),
+    );
+
+    expect(view?.liveness).toBe("live");
+  });
+
+  /** The push channel is down; the map is still correct, just a few seconds
+   * behind, and the feed recovers on its own. */
+  it("reads a dropped doorbell as polling, not as an error", () => {
+    const view = buildZeropsServiceMap(
+      topology(realServices, { doorbellConnected: false } as Partial<ZeropsTopologySnapshot>),
+    );
+
+    expect(view?.liveness).toBe("polling");
+    expect(view?.degraded).toBe(false);
+  });
+
+  /** Absent means the feed reported no doorbell at all — a different claim
+   * from "the doorbell is down", and not something to draw. */
+  it("says nothing about liveness when the feed reported none", () => {
+    expect(buildZeropsServiceMap(topology(realServices))?.liveness).toBeUndefined();
+  });
+});

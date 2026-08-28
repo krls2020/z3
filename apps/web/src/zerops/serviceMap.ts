@@ -75,6 +75,17 @@ export interface ZeropsServiceMapView {
    * guess dressed as a fact.
    */
   readonly runningTool?: string;
+  /**
+   * How the map is being kept current, or undefined when there is nothing to
+   * say about it.
+   *
+   * `polling` is NOT an error: the push channel is down, the map is still
+   * correct and a few seconds behind, and the feed recovers on its own. And
+   * `undefined` is deliberately not `polling` — it means the feed reported no
+   * doorbell at all, which is a different claim from "the doorbell is down"
+   * and must not be drawn as a degraded state.
+   */
+  readonly liveness?: "live" | "polling";
 }
 
 /** `ubuntu/nodejs@22` → `nodejs@22`; a type with no OS prefix is unchanged. */
@@ -163,5 +174,8 @@ export function buildZeropsServiceMap(
       : {}),
     warnings: topology.warnings,
     ...(running === undefined ? {} : { runningTool: running.toolName }),
+    ...(topology.doorbellConnected === undefined
+      ? {}
+      : { liveness: topology.doorbellConnected ? ("live" as const) : ("polling" as const) }),
   };
 }

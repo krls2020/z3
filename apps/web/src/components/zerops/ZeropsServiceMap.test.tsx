@@ -127,3 +127,32 @@ describe("ZeropsServiceMap", () => {
     expect(html).toContain("2 services can be adopted");
   });
 });
+
+describe("ZeropsServiceMap — liveness", () => {
+  const withDoorbell = (doorbellConnected?: boolean): string =>
+    render(
+      topology(
+        [service({ hostname: "kanbandev" })],
+        (doorbellConnected === undefined
+          ? {}
+          : { doorbellConnected }) as Partial<ZeropsTopologySnapshot>,
+      ),
+    );
+
+  it("says nothing while push updates are live", () => {
+    expect(withDoorbell(true)).not.toContain("data-zerops-map-liveness");
+  });
+
+  it("mentions polling quietly when push updates have dropped", () => {
+    const html = withDoorbell(false);
+
+    expect(html).toContain('data-zerops-map-liveness="polling"');
+    expect(html).toContain("reconnecting");
+    // Quiet, not alarming: this is not the degraded banner.
+    expect(html).not.toContain("data-zerops-map-degraded");
+  });
+
+  it("says nothing when the feed reported no doorbell at all", () => {
+    expect(withDoorbell()).not.toContain("data-zerops-map-liveness");
+  });
+});

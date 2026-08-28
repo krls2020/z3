@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
-import { projectActivityPayload } from "./ActivityPayloadProjection.ts";
+import type {
+  OrchestrationEvent,
+  OrchestrationThreadActivity,
+  OrchestrationThreadDetailSnapshot,
+} from "@t3tools/contracts";
+import {
+  projectActivityEvent,
+  projectActivityPayload,
+  projectThreadDetailSnapshot,
+} from "./ActivityPayloadProjection.ts";
 
 function activity(payload: Record<string, unknown>): OrchestrationThreadActivity {
   return {
@@ -327,5 +335,72 @@ describe("projectActivityPayload — zerops results", () => {
     const data = payloadOf(projectActivityPayload(input)).data as Record<string, unknown>;
     expect(data.zerops).toBeUndefined();
     expect((data.item as Record<string, unknown>).tool).toBe("create_issue");
+  });
+});
+
+/**
+ * The Zerops result must survive on EVERY route to the browser, not only the
+ * one function that attaches it. There are three, and they are the reason a
+ * card can be there live and gone after a reload — or the reverse:
+ *
+ * - `projectActivityEvent` — the live WS path (`ws.ts:1498,1543`) AND the
+ *   snapshot a client gets when it reconnects (`ws.ts:1607`);
+ * - `projectThreadDetailSnapshot` — the thread-detail/history read
+ *   (`orchestration/http.ts:88`), which is what a reopened thread renders from.
+ *
+ * All three go through `projectActivityPayload`, so these tests are about the
+ * wiring holding rather than the rule differing.
+ */
+describe("zerops results survive every route to the client", () => {
+  const zeropsActivity = () =>
+    activity({
+      itemType: "mcp_tool_call",
+      data: {
+        toolName: "mcp__zerops__zerops_verify",
+        input: { hostname: "kanbandev" },
+        result: {
+          type: "tool_result",
+          tool_use_id: "toolu_01",
+          content: [{ type: "text", text: '{"status":"healthy"}' }],
+        },
+      },
+    });
+
+  const zeropsOf = (projected: OrchestrationThreadActivity): Record<string, unknown> => {
+    const payload = projected.payload as Record<string, unknown>;
+    const data = payload.data as Record<string, unknown>;
+    return data.zerops as Record<string, unknown>;
+  };
+
+  it("carries it on the live event path", () => {
+    const event = projectActivityEvent({
+      type: "thread.activity-appended",
+      payload: { activity: zeropsActivity() },
+    } as unknown as OrchestrationEvent);
+
+    const projected = (event as unknown as { payload: { activity: OrchestrationThreadActivity } })
+      .payload.activity;
+    expect(zeropsOf(projected).resultText).toBe('{"status":"healthy"}');
+  });
+
+  it("carries it on the thread-detail snapshot a reopened thread renders from", () => {
+    const snapshot = projectThreadDetailSnapshot({
+      thread: { activities: [zeropsActivity()] },
+    } as unknown as OrchestrationThreadDetailSnapshot);
+
+    const projected = (
+      snapshot as unknown as { thread: { activities: OrchestrationThreadActivity[] } }
+    ).thread.activities[0]!;
+    expect(zeropsOf(projected).resultText).toBe('{"status":"healthy"}');
+  });
+
+  /** An event that is not an appended activity passes through untouched. */
+  it("leaves an unrelated event alone", () => {
+    const event = {
+      type: "thread.updated",
+      payload: { anything: true },
+    } as unknown as OrchestrationEvent;
+
+    expect(projectActivityEvent(event)).toBe(event);
   });
 });

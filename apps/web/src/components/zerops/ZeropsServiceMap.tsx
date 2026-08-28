@@ -119,6 +119,11 @@ export function ZeropsServiceMap({ view }: { view: ZeropsServiceMapView | undefi
           <span>{view.runningTool} running</span>
         </div>
       )}
+      {view.liveness === "polling" ? (
+        <p className="text-muted-foreground text-xs" data-zerops-map-liveness="polling">
+          Live updates are reconnecting; the map is refreshing on a timer.
+        </p>
+      ) : null}
       {view.degraded ? (
         <p
           className="rounded-lg border border-warning/40 bg-warning/8 px-3 py-2 text-warning-foreground text-xs"
