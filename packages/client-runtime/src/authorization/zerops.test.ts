@@ -65,13 +65,12 @@ describe("mintZeropsIdentityCredential", () => {
     }),
   );
 
-  it.effect("drops a base path today, because the shared URL helper replaces it", () =>
+  it.effect("keeps the environment's base path in the mint URL", () =>
     Effect.gen(function* () {
-      // `environmentEndpointUrl` assigns `url.pathname` rather than joining, so
-      // an environment served under `/z3/` is addressed at the root. Every
-      // client call has this shape, not just this one. The stream that puts the
-      // server under a base path owns the fix; this pins the behaviour so that
-      // change cannot land silently.
+      // An environment served under `/z3/` (nginx strips the prefix, the client
+      // must keep it) is addressed at `/z3/api/...`: `environmentEndpointUrl`
+      // joins the base path instead of replacing the pathname. Every client
+      // call has this shape, not just this one.
       const fetch = recordedFetch(credentialResponse());
 
       yield* mintZeropsIdentityCredential({
@@ -80,7 +79,7 @@ describe("mintZeropsIdentityCredential", () => {
       }).pipe(provideRemoteHttp(fetch.fetchFn));
 
       expect(String(fetch.calls[0]?.[0])).toBe(
-        "https://zcp-26a7-8080.prg1.zerops.app/api/auth/zerops-identity",
+        "https://zcp-26a7-8080.prg1.zerops.app/z3/api/auth/zerops-identity",
       );
     }),
   );
