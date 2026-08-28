@@ -123,6 +123,8 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
+import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -389,6 +391,16 @@ const makeBrowserOtlpPayload = (spanName: string) =>
     return JSON.parse(request.body) as OtlpTracer.TraceData;
   });
 
+/** What the Zerops topology feed reports on a machine with no `zcp` installed. */
+const unavailableZeropsTopology = {
+  available: false,
+  degraded: false,
+  reason: "The zcp binary is not available",
+  services: [],
+  warnings: [],
+  readAt: DateTime.makeUnsafe(0),
+} as const;
+
 const buildAppUnderTest = (options?: {
   config?: Partial<ServerConfig.ServerConfig["Service"]>;
   layers?: {
@@ -430,6 +442,8 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    zeropsTopology?: Partial<ZeropsTopology.ZeropsTopology["Service"]>;
+    zeropsLifecycle?: Partial<ZeropsLifecycle.ZeropsLifecycle["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -862,6 +876,33 @@ const buildAppUnderTest = (options?: {
         Layer.mock(BrowserTraceCollector.BrowserTraceCollector)({
           record: () => Effect.void,
           ...options?.layers?.browserTraceCollector,
+        }),
+      ),
+      Layer.provide(
+        // A test machine has no `zcp`, which is exactly the shape the real feed
+        // reports there: unavailable, no errors. Mocked rather than built so the
+        // suite does not spawn a doomed child process per test.
+        Layer.mock(ZeropsTopology.ZeropsTopology)({
+          latest: Effect.succeed(unavailableZeropsTopology),
+          changes: Stream.empty,
+          subscribe: Effect.succeed({
+            latest: unavailableZeropsTopology,
+            changes: Stream.empty,
+          }),
+          refresh: Effect.succeed(unavailableZeropsTopology),
+          ...options?.layers?.zeropsTopology,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ZeropsLifecycle.ZeropsLifecycle)({
+          get: (threadId) => Effect.succeed({ threadId, recentTools: [] }),
+          subscribe: (threadId) =>
+            Effect.succeed({
+              latest: { threadId, recentTools: [] },
+              changes: Stream.empty,
+            }),
+          ingest: () => Effect.void,
+          ...options?.layers?.zeropsLifecycle,
         }),
       ),
       Layer.provide(
@@ -4990,6 +5031,38 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         type: "keybindingsUpdated",
         payload: { keybindings: [], issues: [] },
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("answers zerops.topology.get over the websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const snapshot = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.zeropsTopologyGet]({})),
+      );
+
+      // Off a Zerops container this is the honest answer, and it must not be an
+      // error: a non-Zerops environment simply has no topology feed.
+      assert.equal(snapshot.available, false);
+      assert.equal(snapshot.services.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("answers zerops.lifecycle.get for a thread over the websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const state = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.zeropsLifecycleGet]({ threadId: ThreadId.make("thread-1") }),
+        ),
+      );
+
+      assert.equal(state.threadId, "thread-1");
+      assert.equal(state.recentTools.length, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

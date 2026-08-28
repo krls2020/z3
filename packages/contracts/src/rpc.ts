@@ -192,7 +192,7 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
-import { ZeropsTopologySnapshot } from "./zerops.ts";
+import { ZeropsLifecycle, ZeropsLifecycleGetInput, ZeropsTopologySnapshot } from "./zerops.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
@@ -324,6 +324,7 @@ export const WS_METHODS = {
   // Zerops feeds
   zeropsTopologyGet: "zerops.topology.get",
   zeropsTopologyRefresh: "zerops.topology.refresh",
+  zeropsLifecycleGet: "zerops.lifecycle.get",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -337,6 +338,7 @@ export const WS_METHODS = {
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
   subscribeZeropsTopology: "subscribeZeropsTopology",
+  subscribeZeropsLifecycle: "subscribeZeropsLifecycle",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1042,6 +1044,19 @@ export const WsSubscribeZeropsTopologyRpc = Rpc.make(WS_METHODS.subscribeZeropsT
   stream: true,
 });
 
+export const WsZeropsLifecycleGetRpc = Rpc.make(WS_METHODS.zeropsLifecycleGet, {
+  payload: ZeropsLifecycleGetInput,
+  success: ZeropsLifecycle,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsSubscribeZeropsLifecycleRpc = Rpc.make(WS_METHODS.subscribeZeropsLifecycle, {
+  payload: ZeropsLifecycleGetInput,
+  success: ZeropsLifecycle,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1140,6 +1155,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsZeropsTopologyGetRpc,
   WsZeropsTopologyRefreshRpc,
   WsSubscribeZeropsTopologyRpc,
+  WsZeropsLifecycleGetRpc,
+  WsSubscribeZeropsLifecycleRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
