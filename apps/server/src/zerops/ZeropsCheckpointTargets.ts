@@ -25,10 +25,11 @@
  */
 import * as Effect from "effect/Effect";
 
-import type { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef, type ThreadId } from "@t3tools/contracts";
 
 import type * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import { parseTurnDiffFilesFromUnifiedDiff } from "../checkpointing/Diffs.ts";
+import { checkpointRefsPrefixForThread } from "../checkpointing/Utils.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
 import type { ZeropsRepositories } from "./ZeropsRepositorySource.ts";
 
@@ -422,3 +423,124 @@ export const captureBaselineAcrossTargets = (
         .map((result) => ({ cwd: result.cwd, reason: result.reason })),
     })),
   );
+
+export interface PruneThreadRefsResult {
+  /** Repositories the thread's refs were removed from, and how many. */
+  readonly pruned: ReadonlyArray<{ readonly cwd: string; readonly refs: number }>;
+  /** Repositories that could not be reached or refused - left as they were. */
+  readonly failed: ReadonlyArray<{ readonly cwd: string; readonly reason: string }>;
+}
+
+/**
+ * Deletes everything a thread left behind, in every repository it touched.
+ *
+ * Checkpoint refs are hidden, so nothing prunes them on its own: they
+ * accumulate per turn x repository x thread and outlive the thread, which on
+ * Zerops means they outlive it on someone else's disk. The sweep is by prefix
+ * rather than by turn number because a deleted thread's turn count is already
+ * gone from the projection.
+ *
+ * Per repository and tolerant by design: a service that has been unmounted or
+ * deleted keeps its refs and is reported, because failing the whole prune over
+ * one absent host would strand the repositories that are still there.
+ */
+export const pruneThreadRefsAcrossTargets = (
+  fanOut: CheckpointFanOut,
+  input: {
+    readonly targets: ReadonlyArray<CheckpointTarget>;
+    readonly threadId: ThreadId;
+  },
+): Effect.Effect<PruneThreadRefsResult> =>
+  Effect.forEach(
+    input.targets,
+    (target) =>
+      fanOut.vcsProcess
+        .run({
+          operation: "ZeropsCheckpointTargets.listThreadRefs",
+          command: "git",
+          args: [
+            "for-each-ref",
+            "--format=%(refname)",
+            checkpointRefsPrefixForThread(input.threadId),
+          ],
+          cwd: target.cwd,
+          allowNonZeroExit: true,
+        })
+        .pipe(
+          Effect.flatMap((result) => {
+            const refs = result.stdout
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0)
+              .map((line) => CheckpointRef.make(line));
+            if (refs.length === 0) {
+              return Effect.succeed({
+                cwd: target.cwd,
+                outcome: "pruned" as const,
+                refs: 0,
+                reason: "",
+              });
+            }
+            return fanOut.store
+              .deleteCheckpointRefs({ cwd: target.cwd, checkpointRefs: refs })
+              .pipe(
+                Effect.as({
+                  cwd: target.cwd,
+                  outcome: "pruned" as const,
+                  refs: refs.length,
+                  reason: "",
+                }),
+              );
+          }),
+          Effect.catch((error) =>
+            Effect.succeed({
+              cwd: target.cwd,
+              outcome: "failed" as const,
+              refs: 0,
+              reason: error.message,
+            }),
+          ),
+          Effect.catchCause(() =>
+            Effect.succeed({
+              cwd: target.cwd,
+              outcome: "failed" as const,
+              refs: 0,
+              reason: "The repository could not be reached.",
+            }),
+          ),
+        ),
+    { concurrency: "unbounded" },
+  ).pipe(
+    Effect.map((results) => ({
+      pruned: results
+        .filter((result) => result.outcome === "pruned")
+        .map((result) => ({ cwd: result.cwd, refs: result.refs })),
+      failed: results
+        .filter((result) => result.outcome === "failed")
+        .map((result) => ({ cwd: result.cwd, reason: result.reason })),
+    })),
+  );
+
+/**
+ * Which repositories to sweep when a thread is deleted.
+ *
+ * Deliberately not {@link resolveCheckpointTargets}: by the time the deletion
+ * event arrives the thread's cwd may already be gone from the projection, and
+ * on Zerops it is not needed anyway - the repository set is absolute, so every
+ * mounted repository is swept regardless of where the thread was working.
+ * Off Zerops the thread's cwd is the only thing that identifies the
+ * repository, so a thread whose cwd has gone leaves its refs rather than
+ * having them guessed at.
+ */
+export const resolvePruneTargets = (
+  cwd: string | undefined,
+  repositories: ZeropsRepositories,
+): ReadonlyArray<CheckpointTarget> => {
+  if (repositories._tag === "available" && repositories.repositories.length > 0) {
+    return repositories.repositories.map((repository) => ({
+      cwd: repository.mountPath,
+      prefix: "",
+    }));
+  }
+  return cwd === undefined ? [] : [{ cwd, prefix: "" }];
+};

@@ -42,7 +42,9 @@ import {
   captureAcrossTargets,
   captureBaselineAcrossTargets,
   deleteRefsAcrossTargets,
+  pruneThreadRefsAcrossTargets,
   resolveCheckpointTargets,
+  resolvePruneTargets,
   restoreAcrossTargets,
   type CheckpointTarget,
 } from "../../zerops/ZeropsCheckpointTargets.ts";
@@ -106,13 +108,16 @@ const make = Effect.gen(function* () {
   // Which repositories a checkpoint at this cwd covers. On Zerops the thread's
   // cwd is the workspace root and the repositories are the dev services
   // mounted inside it; everywhere else this is the one cwd it has always been.
+  const readRepositories = Effect.fn("readZeropsRepositories")(function* () {
+    return Option.isNone(repositorySource)
+      ? ({ _tag: "disabled" } as const)
+      : yield* repositorySource.value.list;
+  });
+
   const resolveTargets = Effect.fn("resolveCheckpointTargetsForCwd")(function* (
     cwd: string,
   ): Effect.fn.Return<ReadonlyArray<CheckpointTarget>> {
-    const repositories = Option.isNone(repositorySource)
-      ? ({ _tag: "disabled" } as const)
-      : yield* repositorySource.value.list;
-    return resolveCheckpointTargets(cwd, repositories);
+    return resolveCheckpointTargets(cwd, yield* readRepositories());
   });
 
   const appendRevertFailureActivity = (input: {
@@ -850,7 +855,48 @@ const make = Effect.gen(function* () {
       );
   });
 
+  /**
+   * A deleted thread's checkpoint refs are hidden, so nothing else removes
+   * them: they would outlive the thread on every repository it touched - on
+   * Zerops, on other services' disks. Best-effort by design; a repository that
+   * has gone keeps its refs and is logged rather than failing the deletion.
+   */
+  const pruneDeletedThreadRefs = Effect.fn("pruneDeletedThreadRefs")(function* (
+    event: Extract<OrchestrationEvent, { type: "thread.deleted" }>,
+  ) {
+    const threadId = event.payload.threadId;
+    const thread = yield* resolveThreadDetail(threadId).pipe(Effect.orElseSucceed(() => null));
+    const projects = thread ? yield* resolveThreadProjects(thread.projectId) : [];
+    const cwd = thread ? resolveThreadWorkspaceCwd({ thread, projects }) : undefined;
+    const targets = resolvePruneTargets(cwd, yield* readRepositories());
+    if (targets.length === 0) {
+      return;
+    }
+
+    const result = yield* pruneThreadRefsAcrossTargets(fanOut, { targets, threadId });
+    const removed = result.pruned.reduce((total, entry) => total + entry.refs, 0);
+    if (removed > 0) {
+      yield* Effect.logDebug("pruned checkpoint refs for a deleted thread", {
+        threadId,
+        removed,
+        repositories: result.pruned.length,
+      });
+    }
+    for (const failure of result.failed) {
+      yield* Effect.logWarning("checkpoint refs left behind by a deleted thread", {
+        threadId,
+        cwd: failure.cwd,
+        detail: failure.reason,
+      });
+    }
+  });
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (event: OrchestrationEvent) {
+    if (event.type === "thread.deleted") {
+      yield* pruneDeletedThreadRefs(event).pipe(Effect.catchCause(() => Effect.void));
+      return;
+    }
+
     if (event.type === "thread.turn-start-requested" || event.type === "thread.message-sent") {
       yield* ensurePreTurnBaselineFromDomainTurnStart(event);
       return;
@@ -952,7 +998,8 @@ const make = Effect.gen(function* () {
           event.type !== "thread.turn-start-requested" &&
           event.type !== "thread.message-sent" &&
           event.type !== "thread.checkpoint-revert-requested" &&
-          event.type !== "thread.turn-diff-completed"
+          event.type !== "thread.turn-diff-completed" &&
+          event.type !== "thread.deleted"
         ) {
           return Effect.void;
         }
