@@ -8,10 +8,12 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -38,7 +40,10 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
-import { resolveZeropsBootstrapModelSelection } from "./zerops/ZeropsBootstrapModel.ts";
+import {
+  isBootstrapDecidable,
+  resolveZeropsBootstrapModelSelection,
+} from "./zerops/ZeropsBootstrapModel.ts";
 import { isZeropsEnvironment } from "./zerops/ZeropsEnvironment.ts";
 import { forkParked } from "./serverActivation.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -191,6 +196,50 @@ export const getAutoBootstrapDefaultModelSelection = (): ModelSelection => ({
  * from every context the bootstrap already runs in; without it the upstream
  * default stands.
  */
+/**
+ * How long the Zerops bootstrap will wait for the provider probes to land.
+ *
+ * The auth probe's own ceiling is 10s per provider and they run concurrently,
+ * so this is generous headroom rather than an expected wait. It only elapses in
+ * full when an instance never settles at all, and the cost of that is a landing
+ * thread on the upstream default - the same thread the user got before.
+ */
+export const ZEROPS_BOOTSTRAP_PROVIDER_WAIT = Duration.seconds(30);
+
+/** How often the bootstrap re-reads the registry while waiting. */
+export const ZEROPS_BOOTSTRAP_PROVIDER_POLL_INTERVAL = Duration.millis(250);
+
+/**
+ * Read the registry until it carries a decidable picture, or the bound
+ * elapses.
+ *
+ * Polling rather than `streamChanges`: the aggregator's stream subscribes on
+ * stream start, so a probe that lands between our first read and the
+ * subscription would be missed entirely. `getProviders` is a `Ref.get`, so
+ * re-reading costs nothing and cannot race.
+ */
+const awaitDecidableProviders = (registry: ProviderRegistry.ProviderRegistry["Service"]) =>
+  Effect.gen(function* () {
+    const startedAt = yield* Clock.currentTimeMillis;
+    const waitMillis = Duration.toMillis(ZEROPS_BOOTSTRAP_PROVIDER_WAIT);
+
+    for (;;) {
+      const providers = yield* registry.getProviders;
+      if (isBootstrapDecidable(providers)) {
+        return providers;
+      }
+      const elapsed = (yield* Clock.currentTimeMillis) - startedAt;
+      if (elapsed >= waitMillis) {
+        yield* Effect.logWarning(
+          "provider probes did not settle before the bootstrap deadline; using the default model selection",
+          { waitMillis, providerCount: providers.length },
+        );
+        return providers;
+      }
+      yield* Effect.sleep(ZEROPS_BOOTSTRAP_PROVIDER_POLL_INTERVAL);
+    }
+  });
+
 export const resolveAutoBootstrapDefaultModelSelection = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   if (!isZeropsEnvironment(serverConfig)) {
@@ -202,7 +251,7 @@ export const resolveAutoBootstrapDefaultModelSelection = Effect.gen(function* ()
     return getAutoBootstrapDefaultModelSelection();
   }
 
-  const providers = yield* registry.value.getProviders;
+  const providers = yield* awaitDecidableProviders(registry.value);
   return resolveZeropsBootstrapModelSelection(providers) ?? getAutoBootstrapDefaultModelSelection();
 });
 
