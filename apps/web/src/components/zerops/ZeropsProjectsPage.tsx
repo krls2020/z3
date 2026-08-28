@@ -19,8 +19,13 @@ import { Spinner } from "../ui/spinner";
 import { WorkspaceBreadcrumb, WorkspaceBreadcrumbItem } from "../WorkspaceBreadcrumb";
 import { WorkspacePageContainer } from "../WorkspacePageContainer";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
+import {
+  newestProvisioningCandidate,
+  shouldAutoEnterProvisioning,
+} from "~/zerops/autoEnterProvisioning";
 import { zeropsCodeBaseUrl, type ZeropsCandidate } from "~/zerops/candidates";
 import { rememberZeropsEnvironment } from "~/zerops/firstPrompt";
+import { deriveProvisioningStart } from "~/zerops/registrationHandoff";
 import { useZeropsCandidates } from "~/zerops/useZeropsCandidates";
 import { useZeropsCandidateHealth } from "~/zerops/useZeropsCandidateHealth";
 import { useZeropsProvisioning } from "~/zerops/useZeropsProvisioning";
@@ -90,7 +95,7 @@ function NewProjectForm({
 }
 
 function ZeropsProjectsContent() {
-  const { status, client } = useZeropsSession();
+  const { status, client, lastRegistration, clearLastRegistration } = useZeropsSession();
   const { candidates, isLoading, error, refresh } = useZeropsCandidates();
   const candidateHealth = useZeropsCandidateHealth(candidates);
   const [creatingIn, setCreatingIn] = useState<string | null>(null);
@@ -102,6 +107,9 @@ function ZeropsProjectsContent() {
   const [connectError, setConnectError] = useState<string | null>(null);
   // One connect per settled wait, however many renders that takes.
   const connectingRef = useRef<string | null>(null);
+  // Entering the wait on its own happens at most once per mount: a dismissed
+  // wait must never be reopened behind the user's back.
+  const autoEnteredRef = useRef(false);
 
   const connectContainer = useCallback(
     async (containerOrigin: string) => {
@@ -152,6 +160,36 @@ function ZeropsProjectsContent() {
     void connectContainer(readyOrigin);
   }, [connectContainer, readyOrigin]);
 
+  // Enters the provisioning wait without the user clicking anything, for the
+  // two-hop registration flow: sign in here with nothing connected yet, but a
+  // pool-claimed project already on its way in.
+  useEffect(() => {
+    if (autoEnteredRef.current || creatingIn) return;
+
+    // The registration response is the platform's own word on what it
+    // claimed — preferred over inferring it from a candidate's status.
+    if (lastRegistration) {
+      autoEnteredRef.current = true;
+      const { clientId, zcpClaimed } = deriveProvisioningStart(lastRegistration);
+      clearLastRegistration();
+      if (clientId) {
+        setCreatingIn(clientId);
+        provisioning.start(zcpClaimed === undefined ? {} : { zcpClaimed });
+      }
+      return;
+    }
+
+    // Otherwise, wait for the first candidate load and fall back to reading
+    // it off the candidate list — the plain sign-in path.
+    if (isLoading) return;
+    if (!shouldAutoEnterProvisioning(candidates)) return;
+    const target = newestProvisioningCandidate(candidates);
+    if (!target) return;
+    autoEnteredRef.current = true;
+    setCreatingIn(target.project.clientId ?? null);
+    provisioning.start({ zcpClaimed: true });
+  }, [candidates, clearLastRegistration, creatingIn, isLoading, lastRegistration, provisioning]);
+
   if (status === "loading") {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -201,6 +239,15 @@ function ZeropsProjectsContent() {
         onRefresh={refresh}
         health={candidateHealth}
         onConnect={startWaitFor}
+        onWait={(candidate: ZeropsCandidate) => {
+          if (candidate.containerOrigin) {
+            startWaitFor(candidate);
+            return;
+          }
+          setConnectError(null);
+          setCreatingIn(candidate.project.clientId ?? null);
+          provisioning.start({ zcpClaimed: true });
+        }}
         onEnable={(candidate: ZeropsCandidate) => {
           const serviceId = candidate.service?.id;
           if (!serviceId) return;

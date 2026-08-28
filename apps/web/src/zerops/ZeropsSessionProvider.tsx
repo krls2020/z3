@@ -39,6 +39,14 @@ export interface ZeropsSessionValue {
   readonly register: (input: ZeropsRegistrationInput) => Promise<ZeropsRegistrationResponse>;
   readonly verifyTotp: (code: string) => Promise<void>;
   readonly signOut: () => Promise<void>;
+  /**
+   * The response of the most recent in-app registration, until consumed. The
+   * project picker reads it once, to enter the provisioning wait for the
+   * project the registration's pool claim handed over, without waiting for a
+   * candidate list to say so.
+   */
+  readonly lastRegistration: ZeropsRegistrationResponse | null;
+  readonly clearLastRegistration: () => void;
 }
 
 const ZeropsSessionContext = createContext<ZeropsSessionValue | null>(null);
@@ -58,6 +66,7 @@ export function ZeropsSessionProvider({
 }) {
   const [status, setStatus] = useState<ZeropsSessionStatus>("loading");
   const [user, setUser] = useState<ZeropsUser | null>(null);
+  const [lastRegistration, setLastRegistration] = useState<ZeropsRegistrationResponse | null>(null);
 
   const client = useMemo(
     () =>
@@ -123,6 +132,7 @@ export function ZeropsSessionProvider({
         const response = await client.register(input);
         setUser(response.user ?? (await client.fetchUser()));
         setStatus("signed-in");
+        setLastRegistration(response);
         return response;
       },
       verifyTotp: async (code) => {
@@ -132,9 +142,14 @@ export function ZeropsSessionProvider({
       },
       signOut: async () => {
         await client.logout();
+        setLastRegistration(null);
+      },
+      lastRegistration,
+      clearLastRegistration: () => {
+        setLastRegistration(null);
       },
     }),
-    [client, status, user],
+    [client, status, user, lastRegistration],
   );
 
   return <ZeropsSessionContext value={value}>{children}</ZeropsSessionContext>;
