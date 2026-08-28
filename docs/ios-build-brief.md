@@ -2,7 +2,7 @@
 
 For an agent picking this up cold. Read [`../README.md`](../README.md) first for what this fork is.
 
-**Repo:** `/Users/macbook/Documents/Zerops-MCP/zerops-code` · branch `zerops-poc` (tracks
+**Repo:** `/Users/macbook/Documents/Zerops-MCP/z3` · branch `main` (tracks
 `origin/main` = `git@github.com:krls2020/z3.git`)
 **App:** `apps/mobile` — Expo / React Native, package `@t3tools/mobile`, Expo SDK-managed (no
 `ios/` dir checked in; `expo prebuild` generates it).
@@ -84,7 +84,10 @@ Two servers you can point it at:
   LAN only, and the phone must be on the same network. Note the dev web server binds **IPv6
   loopback only**, so a LAN URL needs the server, not the vite port.
 
-Pairing needs a one-time code minted on that server. `poc/pair.sh` does it for the container.
+Pairing differs by server: on a Zerops project, sign-in goes through the identity door — no
+pairing code, no shared secret (`../zcp/docs/spec-z3.md` §3–§4). The one-time pairing code stays
+only for a non-Zerops server (the local dev server above), minted with
+`node apps/server/src/bin.ts pair`.
 
 ---
 
@@ -109,8 +112,8 @@ If asked to rebrand mobile too, treat it as its own task and keep it additive, l
 
 ## Ground rules
 
-- **Additive changes only.** This is a fork that must stay rebasable on `upstream/main`. Prefer
-  `.env` and new files over editing `app.config.ts`.
+- **Fork rules apply** — see `docs/internals/zerops/fork.md` for what's owned, ported, or
+  imported. Prefer `.env` and new files over editing `app.config.ts`.
 - **Never rename** the `t3code://` URL schemes casually — the dev client launches through
   `t3code-dev`, and the scheme is also registered with Clerk for OAuth callbacks.
 - **Do not commit `.env`** (already gitignored) or any signing asset.
