@@ -87,6 +87,8 @@ import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import * as ZeropsGitSpawner from "./zerops/ZeropsGitSpawner.ts";
+import * as ZeropsRepositorySource from "./zerops/ZeropsRepositorySource.ts";
 import { zeropsHttpApiLayer } from "./zerops/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -691,6 +693,11 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(ApplicationObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
+      // Inside a Zerops container every git spawn above this line is rewritten
+      // into `ssh <service> git -C /var/www …`; everything else, this layer's
+      // own `zcp studio topology` call included, reaches the platform spawner
+      // below unchanged.
+      Layer.provideMerge(ZeropsGitSpawner.layer.pipe(Layer.provide(ZeropsRepositorySource.layer))),
       Layer.provideMerge(PlatformServicesLive),
     );
   }),
