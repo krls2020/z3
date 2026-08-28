@@ -13,6 +13,7 @@ import {
   type AuthPairingCredentialResult,
   type AuthSessionId,
   type AuthSessionState,
+  type ServerAuthBootstrapMethod,
   type ServerAuthDescriptor,
   type ServerAuthSessionMethod,
   type AuthWebSocketTicketResult,
@@ -447,6 +448,8 @@ export class EnvironmentAuth extends Context.Service<
       ServerAuthInvalidCredentialError | ServerAuthInvalidRequestError | ServerAuthInternalError
     >;
     readonly createPairingLink: (input?: {
+      /** Which door is minting. Defaults to `one-time-token`. */
+      readonly method?: ServerAuthBootstrapMethod;
       readonly ttl?: Duration.Duration;
       readonly label?: string;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
@@ -719,14 +722,20 @@ export const make = Effect.gen(function* () {
             if (!grantedScopes.every((scope) => grant.scopes.includes(scope))) {
               return yield* new ServerAuthScopeNotGrantedError({});
             }
-            // Inside a Zerops project the session's lifetime IS the
+            // A session minted at the Zerops identity door lives exactly one
             // membership window: the server holds no Zerops token and the
             // platform exposes no member list, so membership cannot be
             // re-checked server-side. When the window lapses the next connect
             // fails and the client re-mints with the Zerops token it already
             // holds - and THAT re-mint is the real membership call. Removing a
             // member therefore ends their access within one window.
-            const sessionTtl = serverConfig.zerops?.membershipTtl;
+            //
+            // The window follows the door, not the environment. A second
+            // device paired with a one-time token holds no Zerops token and so
+            // has nothing to re-mint with; capping it here would log it out
+            // every window with no way back in.
+            const sessionTtl =
+              grant.method === "zerops-identity" ? serverConfig.zerops?.membershipTtl : undefined;
             return yield* sessions
               .issue({
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
@@ -803,6 +812,7 @@ export const make = Effect.gen(function* () {
     function* (input) {
       const createdAt = yield* DateTime.now;
       const issued = yield* bootstrapCredentials.issueOneTimeToken({
+        ...(input?.method ? { method: input.method } : {}),
         scopes: input?.scopes ?? AuthStandardClientScopes,
         subject: input?.subject ?? "one-time-token",
         ...(input?.ttl ? { ttl: input.ttl } : {}),

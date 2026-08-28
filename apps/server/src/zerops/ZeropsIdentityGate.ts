@@ -65,6 +65,9 @@ export const mintZeropsPairingCredential = Effect.fn("Zerops.mintPairingCredenti
     });
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const issued = yield* serverAuth.createPairingLink({
+      // Names the door, so the session it becomes is the one that can renew
+      // itself by re-proving membership.
+      method: "zerops-identity",
       scopes: zeropsGrantScopes,
       subject: member.userId,
       ttl: ZEROPS_PAIRING_GRANT_TTL,
