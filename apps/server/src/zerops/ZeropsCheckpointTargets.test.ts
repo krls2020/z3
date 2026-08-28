@@ -9,11 +9,17 @@ import type * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import type * as VcsProcess from "../vcs/VcsProcess.ts";
 import type { ZeropsRepositories, ZeropsRepository } from "./ZeropsRepositorySource.ts";
 import {
+  checkpointRefForThreadTurn,
+  checkpointRefsPrefixForThread,
+} from "../checkpointing/Utils.ts";
+import {
   UNTRACKED_PROBE_MAX_BYTES,
   captureAcrossTargets,
   captureBaselineAcrossTargets,
   mergeCheckpointFiles,
   resolveCheckpointTargets,
+  pruneThreadRefsAcrossTargets,
+  resolvePruneTargets,
   restoreAcrossTargets,
 } from "./ZeropsCheckpointTargets.ts";
 
@@ -169,19 +175,27 @@ const makeStore = (options?: {
   });
 
 /** A `ls-files --others` probe that reports whichever cwds overflow the cap. */
-const makeVcsProcess = (overflowing?: ReadonlySet<string>) =>
+const makeVcsProcess = (
+  overflowing?: ReadonlySet<string>,
+  refsByCwd?: Record<string, string>,
+  unreachable?: ReadonlySet<string>,
+) =>
   Effect.gen(function* () {
     const probes = yield* Ref.make<ReadonlyArray<VcsProcess.VcsProcessInput>>([]);
     const service = {
       run: (input: VcsProcess.VcsProcessInput) =>
         Ref.update(probes, (previous) => [...previous, input]).pipe(
-          Effect.as({
-            exitCode: 0,
-            stdout: "",
-            stderr: "",
-            stdoutTruncated: overflowing?.has(input.cwd) ?? false,
-            stderrTruncated: false,
-          }),
+          Effect.andThen(
+            unreachable?.has(input.cwd) === true
+              ? Effect.fail(storeError(input.cwd))
+              : Effect.succeed({
+                  exitCode: 0,
+                  stdout: input.args.includes("for-each-ref") ? (refsByCwd?.[input.cwd] ?? "") : "",
+                  stderr: "",
+                  stdoutTruncated: overflowing?.has(input.cwd) ?? false,
+                  stderrTruncated: false,
+                }),
+          ),
         ),
     } as unknown as VcsProcess.VcsProcess["Service"];
     return { service, probes } as const;
@@ -466,4 +480,104 @@ describe("captureBaselineAcrossTargets", () => {
         ["/var/www/kanbandev"],
       );
     }).pipe(Effect.runPromise));
+});
+
+describe("pruneThreadRefsAcrossTargets", () => {
+  it("names the same refs the capture side writes", () => {
+    const threadId = "thread-1" as never;
+    assert.isTrue(
+      checkpointRefForThreadTurn(threadId, 3).startsWith(checkpointRefsPrefixForThread(threadId)),
+    );
+  });
+
+  it("deletes every ref the thread left in every repository it covered", () =>
+    Effect.gen(function* () {
+      const store = yield* makeStore();
+      const vcs = yield* makeVcsProcess(undefined, {
+        "/var/www/kanbandev":
+          "refs/t3/checkpoints/dGhyZWFk/turn/0\nrefs/t3/checkpoints/dGhyZWFk/turn/1\n",
+        "/var/www/apidev": "refs/t3/checkpoints/dGhyZWFk/turn/0\n",
+      });
+
+      const result = yield* pruneThreadRefsAcrossTargets(fanOut(store, vcs), {
+        targets,
+        threadId: "thread-1" as never,
+      });
+
+      assert.deepStrictEqual(
+        result.pruned.map((entry) => [entry.cwd, entry.refs]),
+        [
+          ["/var/www/kanbandev", 2],
+          ["/var/www/apidev", 1],
+        ],
+      );
+      assert.deepStrictEqual(result.failed, []);
+      assert.deepStrictEqual(
+        (yield* Ref.get(store.calls))
+          .filter((call) => call.op === "deleteCheckpointRefs")
+          .map((call) => call.cwd),
+        ["/var/www/kanbandev", "/var/www/apidev"],
+      );
+    }).pipe(Effect.runPromise));
+
+  it("tolerates a repository that is gone and still prunes the rest", () =>
+    Effect.gen(function* () {
+      const store = yield* makeStore();
+      const vcs = yield* makeVcsProcess(
+        undefined,
+        {
+          "/var/www/apidev": "refs/t3/checkpoints/dGhyZWFk/turn/0\n",
+        },
+        new Set(["/var/www/kanbandev"]),
+      );
+
+      const result = yield* pruneThreadRefsAcrossTargets(fanOut(store, vcs), {
+        targets,
+        threadId: "thread-1" as never,
+      });
+
+      assert.deepStrictEqual(
+        result.pruned.map((entry) => entry.cwd),
+        ["/var/www/apidev"],
+      );
+      assert.deepStrictEqual(
+        result.failed.map((entry) => entry.cwd),
+        ["/var/www/kanbandev"],
+      );
+    }).pipe(Effect.runPromise));
+
+  it("asks for no deletion when a repository holds none of the thread's refs", () =>
+    Effect.gen(function* () {
+      const store = yield* makeStore();
+      const vcs = yield* makeVcsProcess(undefined, {});
+
+      yield* pruneThreadRefsAcrossTargets(fanOut(store, vcs), {
+        targets,
+        threadId: "thread-1" as never,
+      });
+
+      assert.deepStrictEqual(
+        (yield* Ref.get(store.calls)).filter((call) => call.op === "deleteCheckpointRefs"),
+        [],
+      );
+    }).pipe(Effect.runPromise));
+});
+
+describe("resolvePruneTargets", () => {
+  it("sweeps every mounted repository, without needing the deleted thread's cwd", () => {
+    assert.deepStrictEqual(resolvePruneTargets(undefined, available([kanban, api])), [
+      { cwd: "/var/www/kanbandev", prefix: "" },
+      { cwd: "/var/www/apidev", prefix: "" },
+    ]);
+  });
+
+  it("falls back to the thread's own cwd off Zerops", () => {
+    assert.deepStrictEqual(resolvePruneTargets("/home/me/repo", { _tag: "disabled" }), [
+      { cwd: "/home/me/repo", prefix: "" },
+    ]);
+  });
+
+  it("has nothing to sweep when neither a repository set nor a cwd survives", () => {
+    assert.deepStrictEqual(resolvePruneTargets(undefined, { _tag: "disabled" }), []);
+  });
 });

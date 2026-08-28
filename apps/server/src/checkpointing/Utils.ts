@@ -9,6 +9,16 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
   );
 }
 
+/**
+ * Every checkpoint ref a thread owns sits under this prefix, so deleting the
+ * thread's history is a prefix sweep rather than a walk of turn numbers -
+ * which matters because the turns a thread reached are not recoverable once
+ * its projection rows are gone.
+ */
+export function checkpointRefsPrefixForThread(threadId: ThreadId): string {
+  return `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}`;
+}
+
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;
