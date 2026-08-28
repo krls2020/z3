@@ -5,6 +5,7 @@ import * as Layer from "effect/Layer";
 
 import * as ServerConfig from "../config.ts";
 import * as EnvironmentAuthPolicy from "./EnvironmentAuthPolicy.ts";
+import { resolveZeropsEnvironment } from "../zerops/ZeropsEnvironment.ts";
 
 const makeEnvironmentAuthPolicyLayer = (
   overrides?: Partial<ServerConfig.ServerConfig["Service"]>,
@@ -149,6 +150,49 @@ it.layer(NodeServices.layer)("EnvironmentAuthPolicy.layer", (it) => {
         makeEnvironmentAuthPolicyLayer({
           mode: "web",
           host: "192.168.1.50",
+        }),
+      ),
+    ),
+  );
+  it.effect("offers the Zerops identity door, and is remote-reachable on loopback", () =>
+    Effect.gen(function* () {
+      const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
+      const descriptor = yield* policy.getDescriptor();
+
+      // The container binds loopback and is published by its own nginx, so the
+      // bind address says nothing about who can reach it.
+      expect(descriptor.policy).toBe("remote-reachable");
+      // The identity door first; the authenticated pairing-token path stays so
+      // a signed-in member can still pair a second device.
+      expect(descriptor.bootstrapMethods).toEqual(["zerops-identity", "one-time-token"]);
+    }).pipe(
+      Effect.provide(
+        makeEnvironmentAuthPolicyLayer({
+          mode: "web",
+          host: "127.0.0.1",
+          zerops: resolveZeropsEnvironment({
+            projectId: "nTV3oMB2SS634ImDJnQckg",
+            apiHost: undefined,
+            allowedOrigins: [],
+            membershipTtlSeconds: undefined,
+          }),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("leaves a non-Zerops environment on the upstream pairing method", () =>
+    Effect.gen(function* () {
+      const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
+      const descriptor = yield* policy.getDescriptor();
+
+      expect(descriptor.policy).toBe("loopback-browser");
+      expect(descriptor.bootstrapMethods).toEqual(["one-time-token"]);
+    }).pipe(
+      Effect.provide(
+        makeEnvironmentAuthPolicyLayer({
+          mode: "web",
+          host: "127.0.0.1",
         }),
       ),
     ),
