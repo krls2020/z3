@@ -15,17 +15,10 @@ list the peers.
 
 ---
 
-### Q-10 · Does Zerops' Turnstile site key accept a token solved on a foreign hostname?
-
-**Blocks** Whether S4 can register a user from the z3 origin at all: the captcha IS enforced server-side (`verified.md`, "Q-10 (first half)"), so z3 must host the Turnstile widget itself — which only works if the site key's hostname allowlist admits the z3 origins (a platform-side Cloudflare setting).
-**How to answer** A page on `http://localhost` embedding the widget with the GUI's production site key (`turnstileToken` in `../frontend-legacy/apps/zerops/src/environments/`): a token ⇒ register with it (Q-11); a widget error (e.g. `110200`) ⇒ stop and raise with the platform. Running 2026-08-28.
-
----
-
 ### Q-11 · Live registration + pool claim run
 
 **Blocks** S4's "brand-new account reaches a thread" acceptance; confirms `zcpClaimed`, the timing until the claimed `zcp` is `ACTIVE`, and what `POST /registration` returns for a pool-aware signup.
-**What is known** The exact request and the fallback calls are in `verified.md` S0.7; a ready-to-run curl sequence exists in the S0 report (`../zcp/plans/z3-s0-report-2026-08-28.md`).
+**What is known** The exact request and the fallback calls are in `verified.md` S0.7. Registration cannot be driven from a foreign origin (Q-10, answered: the Turnstile key is hostname-bound), so the live run goes through the real GUI (`app.zerops.io/registration?zcp=true`, puppeteer) and measures the claim from the API afterwards — running 2026-08-28.
 **How to answer** Owner supplies throwaway e-mail addresses; run the sequence; record `zcpClaimed`, the project id, and the time to `ACTIVE` with direct reads. Waiting on the owner as of 2026-08-28.
 
 ---
