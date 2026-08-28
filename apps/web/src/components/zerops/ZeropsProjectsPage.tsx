@@ -109,9 +109,9 @@ export function ZeropsProjectsPage() {
                   <CloudIcon />
                 </EmptyMedia>
                 <EmptyHeader>
-                  <EmptyTitle>No Zerops token yet</EmptyTitle>
+                  <EmptyTitle>Not signed in to Zerops</EmptyTitle>
                   <EmptyDescription>
-                    Add a personal access token in{" "}
+                    Sign in to your Zerops account in{" "}
                     <Link to="/settings/zerops" className="underline underline-offset-4">
                       Settings → Zerops
                     </Link>{" "}

@@ -47,6 +47,7 @@ import { SettingsRow } from "./components/SettingsRow";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
 import { resolveAgentAwarenessPlatformPresentation } from "./SettingsRouteScreen.logic";
+import { useZeropsAuth } from "../zerops/ZeropsAuthProvider";
 
 type NotificationStatus = "checking" | "enabled" | "disabled" | "unsupported";
 type LiveActivityStatus = "checking" | "enabled" | "disabled" | "signed-out" | "linking";
@@ -116,6 +117,8 @@ function LocalSettingsRouteScreen() {
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
+        <ZeropsSettingsSection />
+
         <SettingsSection title="Configuration">
           <SettingsRow
             icon="desktopcomputer"
@@ -364,7 +367,7 @@ function ConfiguredSettingsRouteScreen() {
 
       Alert.alert(
         "Disable notifications",
-        "Notification permission is controlled by iOS. Open Settings to disable notifications for T3 Code.",
+        "Notification permission is controlled by iOS. Open Settings to disable notifications for Zerops Code.",
         [
           { text: "Cancel", style: "cancel" },
           { text: "Open Settings", onPress: () => void Linking.openSettings() },
@@ -450,6 +453,8 @@ function ConfiguredSettingsRouteScreen() {
           paddingBottom: Math.max(insets.bottom, 18) + 18,
         }}
       >
+        <ZeropsSettingsSection />
+
         <View className="gap-3">
           <SettingsSection title="Account">
             <SettingsRow
@@ -460,7 +465,7 @@ function ConfiguredSettingsRouteScreen() {
             />
           </SettingsSection>
           <Text className="px-2 text-sm text-foreground-muted">
-            T3 Code works locally without signing in. Cloud features are optional.
+            Zerops Code works locally without signing in. Cloud features are optional.
           </Text>
         </View>
 
@@ -524,6 +529,35 @@ function ConfiguredSettingsRouteScreen() {
         <AppSettingsSection />
       </ScrollView>
     </View>
+  );
+}
+
+function ZeropsSettingsSection() {
+  const { auth, selection } = useZeropsAuth();
+  const accountLabel =
+    auth.status === "loading"
+      ? "Checking"
+      : auth.status === "signedIn"
+        ? auth.user.email
+        : auth.status === "twoFactor"
+          ? "Finish 2FA"
+          : "Sign in";
+
+  return (
+    <SettingsSection title="Zerops">
+      <SettingsRow
+        icon="person.crop.circle"
+        label="Zerops Account"
+        value={accountLabel}
+        target="SettingsZeropsAccount"
+      />
+      <SettingsRow
+        icon="square.stack.3d.up"
+        label="Projects"
+        value={selection?.projectId ? "Active" : undefined}
+        target="SettingsZeropsProjects"
+      />
+    </SettingsSection>
   );
 }
 

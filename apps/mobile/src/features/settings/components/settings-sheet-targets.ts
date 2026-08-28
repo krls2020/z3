@@ -1,5 +1,7 @@
 export type SettingsSheetTarget =
   | "SettingsEnvironments"
+  | "SettingsZeropsAccount"
+  | "SettingsZeropsProjects"
   | "SettingsArchive"
   | "SettingsAppearance"
   | "SettingsProjectGrouping"

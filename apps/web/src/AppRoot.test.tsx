@@ -7,15 +7,19 @@ import { PreviewAutomationHosts } from "./components/preview/PreviewAutomationHo
 import { QuitHoldOverlay } from "./components/QuitHoldOverlay";
 import { AppAtomRegistryProvider } from "./rpc/atomRegistry";
 import type { AppRouter } from "./router";
+import { ZeropsSessionProvider } from "./zerops/session";
 import { AppRoot } from "./AppRoot";
 
 describe("AppRoot", () => {
-  it("shares the application atom registry with routed UI and renderer-wide desktop hosts", () => {
+  it("shares the application atom registry and Zerops session with routed UI and renderer-wide desktop hosts", () => {
     const root = AppRoot({ router: {} as AppRouter });
 
     expect(root.type).toBe(AppAtomRegistryProvider);
+    const zeropsProvider = (root as ReactElement<{ readonly children: ReactNode }>).props.children;
+    expect(isValidElement(zeropsProvider) && zeropsProvider.type).toBe(ZeropsSessionProvider);
+
     const children = Children.toArray(
-      (root as ReactElement<{ readonly children: ReactNode }>).props.children,
+      (zeropsProvider as ReactElement<{ readonly children: ReactNode }>).props.children,
     );
     expect(children).toHaveLength(4);
     expect(isValidElement(children[0]) && children[0].type).toBe(RouterProvider);

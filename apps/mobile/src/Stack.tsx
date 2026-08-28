@@ -56,6 +56,8 @@ import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteSc
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
 import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
+import { SettingsZeropsAccountRouteScreen } from "./features/zerops/SettingsZeropsAccountRouteScreen";
+import { SettingsZeropsProjectsRouteScreen } from "./features/zerops/SettingsZeropsProjectsRouteScreen";
 import { UsageRouteScreen } from "./features/usage/UsageRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
 import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
@@ -154,6 +156,20 @@ const SettingsContentStack = createNativeStackNavigator({
       linking: "environments",
       options: {
         title: "Environments",
+      },
+    }),
+    SettingsZeropsAccount: createNativeStackScreen({
+      screen: SettingsZeropsAccountRouteScreen,
+      linking: "zerops/account",
+      options: {
+        title: "Zerops Account",
+      },
+    }),
+    SettingsZeropsProjects: createNativeStackScreen({
+      screen: SettingsZeropsProjectsRouteScreen,
+      linking: "zerops/projects",
+      options: {
+        title: "Zerops Projects",
       },
     }),
     SettingsEnvironmentNew: createNativeStackScreen({

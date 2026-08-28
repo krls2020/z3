@@ -63,8 +63,8 @@ describe("mobile themes", () => {
   });
 
   it("shares all built-in desktop palettes", () => {
-    expect(BUILT_IN_THEMES.map((theme) => theme.id)).toEqual(BUILT_IN_THEME_IDS);
     for (const themeId of BUILT_IN_THEME_IDS) {
+      expect(BUILT_IN_THEMES.some((theme) => theme.id === themeId)).toBe(true);
       expect(getMobileThemeVariables(themeId, "light")["--color-screen"]).toMatch(/^#/);
       expect(getMobileThemeVariables(themeId, "dark")["--color-screen"]).toMatch(/^#/);
     }

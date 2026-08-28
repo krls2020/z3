@@ -11,11 +11,14 @@ import {
   type ZeropsServiceGroup,
   type ZeropsVerticalAutoscaling,
 } from "~/zerops/api";
+import { resolveConnectedEnvironmentId, useConnectedZeropsOrigins } from "~/zerops/candidates";
 
 import { cn } from "../../lib/utils";
 import { Badge } from "../ui/badge";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ZeropsMountsPanel } from "./mounts/ZeropsMountsPanel";
 import { StatusPill } from "./statusBadge";
 
 const GROUP_SECTIONS: ReadonlyArray<{
@@ -62,12 +65,22 @@ function ResourceBar({
 }) {
   const filled = max > 0 ? Math.min(100, (min / max) * 100) : 0;
   return (
-    <span className="flex min-w-0 flex-1 items-center gap-1.5" title={`${label}: ${min}–${max}`}>
-      <span className="w-8 shrink-0 text-[10px] text-muted-foreground/70">{label}</span>
-      <span className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
-        <span className="block h-full rounded-full bg-primary/60" style={{ width: `${filled}%` }} />
-      </span>
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            <span className="w-8 shrink-0 text-[10px] text-muted-foreground/70">{label}</span>
+            <span className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
+              <span
+                className="block h-full rounded-full bg-primary/60"
+                style={{ width: `${filled}%` }}
+              />
+            </span>
+          </span>
+        }
+      />
+      <TooltipPopup>{`${label}: ${min}–${max}`}</TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -92,14 +105,16 @@ function ResourceEnvelope({ autoscaling }: { readonly autoscaling: ZeropsVertica
 function ServiceCard({
   service,
   subdomainPrefix,
+  region,
 }: {
   readonly service: ZeropsService;
   readonly subdomainPrefix: string | undefined;
+  readonly region: string | undefined;
 }) {
   const firstPort = service.ports[0]?.port;
   const openUrl =
-    service.subdomainAccess && subdomainPrefix && firstPort
-      ? buildContainerUrl(service.name, subdomainPrefix, firstPort)
+    service.subdomainAccess && subdomainPrefix && region && firstPort
+      ? buildContainerUrl(service.name, subdomainPrefix, firstPort, region)
       : null;
   const autoscaling = service.currentAutoscaling?.verticalAutoscaling;
 
@@ -147,11 +162,13 @@ function ServiceGroupSection({
   label,
   services,
   subdomainPrefix,
+  region,
   defaultOpen,
 }: {
   readonly label: string;
   readonly services: ReadonlyArray<ZeropsService>;
   readonly subdomainPrefix: string | undefined;
+  readonly region: string | undefined;
   readonly defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
@@ -171,7 +188,12 @@ function ServiceGroupSection({
       <CollapsiblePanel>
         <div className="flex flex-col gap-2 pt-2 pb-1">
           {services.map((service) => (
-            <ServiceCard key={service.id} service={service} subdomainPrefix={subdomainPrefix} />
+            <ServiceCard
+              key={service.id}
+              service={service}
+              subdomainPrefix={subdomainPrefix}
+              region={region}
+            />
           ))}
         </div>
       </CollapsiblePanel>
@@ -193,6 +215,12 @@ export function ZeropsProjectDetail({
 }) {
   const [state, setState] = useState<DetailState>({ status: "loading" });
   const generationRef = useRef(0);
+
+  // A mounts section only makes sense for a *connected* project. The overview
+  // this view already fetched is enough to answer that, so resolve the
+  // environment from it rather than running the whole candidate sweep (every
+  // project, plus an overview each) just to learn one id.
+  const connectedOrigins = useConnectedZeropsOrigins();
 
   useEffect(() => {
     generationRef.current += 1;
@@ -238,6 +266,7 @@ export function ZeropsProjectDetail({
 
   const { overview } = state;
   const grouped = groupServices(overview.services);
+  const connectedEnvironmentId = resolveConnectedEnvironmentId(overview, connectedOrigins);
 
   return (
     <div className="flex flex-col gap-6">
@@ -258,11 +287,14 @@ export function ZeropsProjectDetail({
               label={label}
               services={services}
               subdomainPrefix={overview.subdomainPrefix}
+              region={overview.region}
               defaultOpen={defaultOpen}
             />
           );
         })
       )}
+
+      {connectedEnvironmentId ? <ZeropsMountsPanel environmentId={connectedEnvironmentId} /> : null}
     </div>
   );
 }

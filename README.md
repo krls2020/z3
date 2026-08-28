@@ -70,7 +70,8 @@ Be clear about the split — most of this repo is upstream T3.
   subdomain is on, and the autoscaling envelope (CPU/RAM/disk min–max).
 - Settings → Zerops — your Zerops token, and connecting a project's `zcp` container as an
   environment (the container URL is derived, you don't hunt for it).
-- Branding: a `zerops` built-in theme, logo, product name.
+- Branding: the `zerops` theme, Zerops logo, and Zerops Code product name across web, desktop,
+  and mobile.
 
 **In the container (pre-existing zcp, not built here):** the actual leverage — the agent's
 `zerops_*` MCP toolset. That is what makes this different from any other agent GUI, and it is not
@@ -91,10 +92,12 @@ the same.
 projects, so picking `[0]` looks like an empty account. `fetchAllProjects()` reads every
 membership and merges, tagging each project with its org.
 
-**Token handling.** The Zerops token lives in `localStorage` (`zerops:api-token`), browser-local,
+**Token handling.** The web POC token lives in `localStorage` (`zerops:api-token`), browser-local,
 sent only to the Zerops API. It is **subscribed, not sampled**: you enter it in Settings and reach
 `/zerops` by client-side navigation, so a mount-time read would show "no token" until a hard
-reload.
+reload. Mobile instead implements the GUI's email/password, TOTP/recovery, and refresh-token flow;
+its complete session is stored in the platform secure store and a partial 2FA token remains
+memory-only.
 
 **No topology graph.** `connectedStacks` comes back empty on every service, so dependency edges
 would be invented. Grouping and resources are real API data; relationships are not, so they are
@@ -145,6 +148,10 @@ code-server URL; `zcp init` restores it.
 ---
 
 ## Known gaps
+
+The full ledger — verified facts, deliberate POC shortcuts and the questions that block a real
+implementation — lives in [`docs/internals/zerops/`](docs/internals/zerops/README.md). The
+highlights:
 
 - **Connect round-trip** not exercised end to end.
 - **sshfs workspaces.** The zcp flow mounts other services into `/var/www` over sshfs. Every turn

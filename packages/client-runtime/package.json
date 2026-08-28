@@ -47,6 +47,10 @@
       "types": "./src/relay/index.ts",
       "default": "./src/relay/index.ts"
     },
+    "./zerops": {
+      "types": "./src/zerops/index.ts",
+      "default": "./src/zerops/index.ts"
+    },
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"

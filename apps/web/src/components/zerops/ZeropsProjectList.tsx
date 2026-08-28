@@ -110,7 +110,7 @@ export function ZeropsProjectList({
   if (!isLoading && projects.length === 0) {
     return (
       <p className="px-3 text-sm text-muted-foreground sm:px-4">
-        This token's organization doesn't have any projects yet.
+        This account doesn't have any projects yet.
       </p>
     );
   }

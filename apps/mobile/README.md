@@ -1,7 +1,7 @@
-# T3 Code Mobile
+# Zerops Code Mobile
 
 > [!WARNING]
-> T3 Code Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
+> Zerops Code Mobile is currently in development and is not distributed yet. If you want to try it out, you can build it from source.
 
 ## Quickstart
 
@@ -10,15 +10,30 @@
 
 This app has three variants:
 
-- `development`: Expo dev client, installable side-by-side as `T3 Code Dev`
-- `preview`: persistent internal preview build, installable side-by-side as `T3 Code Preview`
-- `production`: store/release build as `T3 Code`
+- `development`: Expo dev client, installable side-by-side as `Zerops Code Dev`
+- `preview`: persistent internal preview build, installable side-by-side as `Zerops Code Preview`
+- `production`: store/release build as `Zerops Code`
 
 Run commands from `apps/mobile`.
 
 T3 Connect is optional and disabled in a fresh clone. Public configuration belongs in the
 repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
 [`../../.env.example`](../../.env.example).
+
+## Zerops account and projects
+
+Settings → Zerops Account uses the same password, TOTP/recovery-code, bearer-token, and
+refresh-token API flow as the Zerops GUI. The app stores only the resulting complete session in the
+native secure store; it never stores the password or an unfinished 2FA session.
+
+Settings → Projects loads active organization memberships from `/user/info`, then loads projects
+for every organization. The selected organization and project are remembered per Zerops user. A
+project with a public `zcp` service can prefill Add Environment, but authorizing agent access still
+requires that environment's one-time pairing code.
+
+Native passkey/security-key login and GitHub/GitLab login are not part of this first mobile slice.
+Accounts with TOTP can use the authenticator flow; accounts without TOTP need a recovery code until
+native passkey support lands.
 
 ## Development
 
@@ -41,6 +56,7 @@ entitlement, and native Sign in with Apple entitlement; builds without this opt-
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
 T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code.dev \
+T3CODE_IOS_PERSONAL_TEAM_ID=YOURTEAMID \
 vp run ios:dev
 ```
 
@@ -55,6 +71,7 @@ The Personal Team equivalent also needs a unique bundle identifier:
 ```bash
 T3CODE_IOS_PERSONAL_TEAM=1 \
 T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID=com.example.t3code \
+T3CODE_IOS_PERSONAL_TEAM_ID=YOURTEAMID \
 vp run ios:release
 ```
 

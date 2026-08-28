@@ -1,211 +1,215 @@
 /**
- * Thin fetch-based client for the Zerops public REST API, used by the Settings
- * → Zerops panel to list the user's projects and derive their `zcp` container
- * URL. Deliberately plain async/await (no Effect runtime) — this is a small,
- * self-contained POC surface.
+ * Web's Zerops API surface. The Settings → Zerops panel and the Zerops
+ * projects page import plain functions from here rather than a hook, so
+ * this module owns one singleton `ZeropsApiClient` bound to whichever
+ * credential — an account session or a pasted Integration Token — is
+ * currently active, plus its `localStorage` persistence.
+ * `apps/web/src/zerops/session.tsx` wraps the same singleton in a React
+ * context for the sign-in UI; both paths write through the same store, so
+ * either one signing in or out is immediately visible to the other.
  */
 
-const ZEROPS_API_BASE = "https://api.app-prg1.zerops.io";
+import {
+  buildZeropsContainerUrl,
+  categorizeZeropsService,
+  clearZeropsCredential,
+  DEFAULT_ZEROPS_API_BASE,
+  parseZeropsCredential,
+  saveZeropsCredential,
+  summarizeZeropsServices,
+  ZEROPS_CREDENTIAL_STORAGE_KEY,
+  ZeropsApiClient,
+  ZeropsApiError,
+  type ZeropsCredential,
+  type ZeropsProject,
+  type ZeropsProjectOverview,
+  type ZeropsService,
+  type ZeropsServiceGroup,
+  type ZeropsServiceSummary,
+  type ZeropsStorageAdapter,
+  type ZeropsVerticalAutoscaling,
+} from "@t3tools/client-runtime/zerops";
 
-/** Region used to derive container URLs. Zerops projects are single-region today. */
-export const ZEROPS_REGION = "prg1";
+export { ZeropsApiError, buildZeropsContainerUrl as buildContainerUrl };
+export {
+  categorizeZeropsService as categorizeService,
+  summarizeZeropsServices as summarizeServices,
+};
+export type {
+  ZeropsProject,
+  ZeropsProjectOverview,
+  ZeropsService,
+  ZeropsServiceGroup,
+  ZeropsServiceSummary,
+  ZeropsVerticalAutoscaling,
+};
 
-const TOKEN_STORAGE_KEY = "zerops:api-token";
+const localStorageAdapter: ZeropsStorageAdapter = {
+  get: (key) => {
+    try {
+      return Promise.resolve(window.localStorage.getItem(key));
+    } catch {
+      return Promise.resolve(null);
+    }
+  },
+  set: (key, value) => {
+    window.localStorage.setItem(key, value);
+    return Promise.resolve();
+  },
+  remove: (key) => {
+    try {
+      window.localStorage.removeItem(key);
+    } catch {
+      // Best-effort — nothing to surface if local storage is unavailable.
+    }
+    return Promise.resolve();
+  },
+};
 
-export class ZeropsApiError extends Error {
-  readonly status: number | null;
-
-  constructor(message: string, status: number | null = null) {
-    super(message);
-    this.name = "ZeropsApiError";
-    this.status = status;
-  }
-}
-
-export function getToken(): string | null {
-  try {
-    return window.localStorage.getItem(TOKEN_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-const TOKEN_CHANGE_EVENT = "zerops:token-change";
+const AUTH_CHANGE_EVENT = "zerops:auth-change";
 
 /** Notify same-tab listeners; `storage` only fires in *other* tabs. */
-function emitTokenChange(): void {
+function notify(): void {
   try {
-    window.dispatchEvent(new Event(TOKEN_CHANGE_EVENT));
+    window.dispatchEvent(new Event(AUTH_CHANGE_EVENT));
   } catch {
     // Best-effort - a view that misses the signal still reads on next mount.
   }
 }
 
-/** Subscribe to token changes from this tab and from other tabs. */
+/** The one Zerops API client for the whole web app. See the file doc-comment. */
+export const zeropsClient = new ZeropsApiClient({
+  onCredentialChange: async (credential) => {
+    if (credential) await saveZeropsCredential(localStorageAdapter, credential);
+    else await clearZeropsCredential(localStorageAdapter);
+    notify();
+  },
+});
+
+function reseedFromStorage(): void {
+  let credential: ZeropsCredential | null = null;
+  try {
+    credential = parseZeropsCredential(window.localStorage.getItem(ZEROPS_CREDENTIAL_STORAGE_KEY));
+  } catch {
+    credential = null;
+  }
+  if (credential?.kind === "session") zeropsClient.restoreSession(credential.session);
+  else if (credential?.kind === "token") zeropsClient.restoreToken(credential.token);
+  else if (zeropsClient.credential) void zeropsClient.discardCredential();
+}
+
+// Seed the client synchronously at import time so `getToken()` (and anything
+// reading `zeropsClient.credential`) is already correct on first render —
+// no flash of "signed out" while `ZeropsSessionProvider`'s async restore
+// effect (which re-validates against `/user/info`) is still running.
+reseedFromStorage();
+
+/**
+ * Subscribes to credential changes from this tab (login, logout, `setToken`,
+ * refresh, …) and from other tabs via the `storage` event. Named
+ * `subscribeToken` for the existing consumers that only ever dealt with a
+ * pasted token; it now fires for either credential kind.
+ */
 export function subscribeToken(onChange: () => void): () => void {
   const handleStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === TOKEN_STORAGE_KEY) onChange();
+    if (event.key !== null && event.key !== ZEROPS_CREDENTIAL_STORAGE_KEY) return;
+    reseedFromStorage();
+    onChange();
   };
-  window.addEventListener(TOKEN_CHANGE_EVENT, onChange);
+  window.addEventListener(AUTH_CHANGE_EVENT, onChange);
   window.addEventListener("storage", handleStorage);
   return () => {
-    window.removeEventListener(TOKEN_CHANGE_EVENT, onChange);
+    window.removeEventListener(AUTH_CHANGE_EVENT, onChange);
     window.removeEventListener("storage", handleStorage);
   };
 }
 
+/**
+ * Truthy exactly when a usable credential (session or token) is active.
+ * Historically this returned the raw pasted token; consumers only ever test
+ * it for truthiness, so a session-backed sign-in returns a non-empty marker
+ * rather than a real secret.
+ */
+export function getToken(): string | null {
+  const credential = zeropsClient.credential;
+  if (!credential) return null;
+  return credential.kind === "token" ? credential.token : "session";
+}
+
+/** Saves a pasted Integration Token as the active credential. */
 export function setToken(token: string): void {
   try {
-    window.localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    emitTokenChange();
+    window.localStorage.setItem(
+      ZEROPS_CREDENTIAL_STORAGE_KEY,
+      JSON.stringify({ kind: "token", token } satisfies ZeropsCredential),
+    );
   } catch (cause) {
     throw new ZeropsApiError(
       cause instanceof Error ? `Failed to save token: ${cause.message}` : "Failed to save token.",
     );
   }
+  zeropsClient.restoreToken(token);
+  notify();
 }
 
+/** Clears whichever credential (token or session) is currently active. */
 export function clearToken(): void {
   try {
-    window.localStorage.removeItem(TOKEN_STORAGE_KEY);
-    emitTokenChange();
+    window.localStorage.removeItem(ZEROPS_CREDENTIAL_STORAGE_KEY);
   } catch {
     // Best-effort — nothing to surface if local storage is unavailable.
   }
+  void zeropsClient.discardCredential();
 }
 
-interface ZeropsUserInfoResponse {
-  readonly clientUserList?: ReadonlyArray<{
-    readonly clientId?: string;
-    readonly client?: { readonly id?: string; readonly accountName?: string };
-  }>;
+export async function fetchAllProjects(): Promise<ReadonlyArray<ZeropsProject>> {
+  return zeropsClient.fetchAllProjects();
 }
 
-interface ZeropsProjectSearchItem {
-  readonly id: string;
-  readonly name: string;
-  readonly status: string;
+export async function fetchServices(projectId: string): Promise<ReadonlyArray<ZeropsService>> {
+  return zeropsClient.fetchServices(projectId);
 }
 
-interface ZeropsProjectSearchResponse {
-  readonly totalHits: number;
-  readonly items: ReadonlyArray<ZeropsProjectSearchItem>;
+/**
+ * Full detail for a project: identity, region, subdomain prefix, and every
+ * service in its stack. A thin pass-through — see H-01 in
+ * docs/internals/zerops/hacks.md for why this used to need more.
+ */
+export async function fetchProjectOverview(projectId: string): Promise<ZeropsProjectOverview> {
+  return zeropsClient.fetchProjectOverview(projectId);
 }
 
-interface ZeropsProjectDetailResponse {
-  readonly id: string;
-  readonly name: string;
-  readonly status: string;
-  readonly zeropsSubdomainHost?: string;
+interface ZeropsUserDataEntry {
+  readonly key: string;
+  readonly content: string;
 }
 
-export interface ZeropsServicePort {
-  readonly port: number;
-  readonly protocol?: string;
-  readonly scheme?: string;
+interface ZeropsUserDataResponse {
+  readonly list?: ReadonlyArray<ZeropsUserDataEntry>;
 }
 
-export interface ZeropsServiceStackTypeInfo {
-  readonly serviceStackTypeName: string;
-  readonly serviceStackTypeVersionName: string;
-  readonly serviceStackTypeCategory: string;
-}
-
-export interface ZeropsResourceEnvelope {
-  readonly cpuCoreCount: number;
-  readonly memoryGBytes: number;
-  readonly diskGBytes: number;
-}
-
-export interface ZeropsVerticalAutoscaling {
-  readonly minResource: ZeropsResourceEnvelope;
-  readonly maxResource: ZeropsResourceEnvelope;
-  readonly cpuMode: string;
-}
-
-/** A service's live entry in a project's service-stack — one runtime, managed dependency, or system service. */
-export interface ZeropsService {
-  readonly id: string;
-  readonly name: string;
-  readonly status: string;
-  readonly isSystem: boolean;
-  readonly subdomainAccess?: boolean;
-  readonly ports: ReadonlyArray<ZeropsServicePort>;
-  readonly serviceStackTypeInfo: ZeropsServiceStackTypeInfo;
-  readonly currentAutoscaling?: {
-    readonly verticalAutoscaling?: ZeropsVerticalAutoscaling;
-  };
-}
-
-interface ZeropsServiceStackResponse {
-  readonly list: ReadonlyArray<ZeropsService>;
-  readonly totalCount: number;
-}
-
-/** The three groups the Zerops projects page renders services into, derived from `serviceStackTypeCategory`. */
-export type ZeropsServiceGroup = "runtimes" | "data" | "infrastructure";
-
-/** `USER` → Runtimes, `STANDARD`/`OBJECT_STORAGE` → Data, everything else (`CORE`, `BUILD`, ...) → Infrastructure. */
-export function categorizeService(service: ZeropsService): ZeropsServiceGroup {
-  switch (service.serviceStackTypeInfo.serviceStackTypeCategory) {
-    case "USER":
-      return "runtimes";
-    case "STANDARD":
-    case "OBJECT_STORAGE":
-      return "data";
-    default:
-      return "infrastructure";
+/**
+ * Reads a zcp service's `VSCODE_PASSWORD` straight from its user-data.
+ * Verified live against `z3probe` (2026-08-27, see verified.md): the value
+ * comes back unmasked in `content` — no `/reveal` call needed. This bypasses
+ * `ZeropsApiClient`'s typed request surface with a raw authenticated
+ * `fetch`, because that class exposes no generic request method for a new
+ * caller in this file to build on — see hacks.md.
+ */
+export async function fetchZcpVscodePassword(serviceId: string): Promise<string> {
+  const credential = zeropsClient.credential;
+  if (!credential) {
+    throw new ZeropsApiError("Sign in to Zerops first.");
   }
-}
-
-export interface ZeropsServiceSummary {
-  readonly runtimeCount: number;
-  readonly dataCount: number;
-  readonly infrastructureCount: number;
-}
-
-/** Compact per-project counts for the projects list, e.g. "4 runtimes · 2 data". */
-export function summarizeServices(services: ReadonlyArray<ZeropsService>): ZeropsServiceSummary {
-  const summary = { runtimeCount: 0, dataCount: 0, infrastructureCount: 0 };
-  for (const service of services) {
-    const group = categorizeService(service);
-    if (group === "runtimes") summary.runtimeCount += 1;
-    else if (group === "data") summary.dataCount += 1;
-    else summary.infrastructureCount += 1;
-  }
-  return summary;
-}
-
-export interface ZeropsProject {
-  readonly id: string;
-  readonly name: string;
-  readonly status: string;
-  readonly clientId?: string;
-  readonly clientName?: string;
-  readonly subdomainPrefix?: string;
-  readonly zcpService?: {
-    readonly name: string;
-    readonly status: string;
-    readonly url: string;
-  };
-}
-
-async function zeropsFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = getToken();
-  if (!token) {
-    throw new ZeropsApiError("No Zerops API token is set.");
-  }
+  const accessToken =
+    credential.kind === "session" ? credential.session.accessToken : credential.token;
 
   let response: Response;
   try {
-    response = await fetch(`${ZEROPS_API_BASE}${path}`, {
-      ...init,
-      headers: {
-        ...(init?.body ? { "Content-Type": "application/json" } : {}),
-        ...init?.headers,
-        Authorization: `Bearer ${token}`,
-      },
-    });
+    response = await fetch(
+      `${DEFAULT_ZEROPS_API_BASE}/api/rest/public/service-stack/${serviceId}/user-data`,
+      { headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` } },
+    );
   } catch (cause) {
     throw new ZeropsApiError(
       cause instanceof Error
@@ -213,159 +217,19 @@ async function zeropsFetch<T>(path: string, init?: RequestInit): Promise<T> {
         : "Network error contacting Zerops.",
     );
   }
-
   if (!response.ok) {
-    if (response.status === 401 || response.status === 403) {
-      throw new ZeropsApiError(
-        "Zerops rejected this token. It may be invalid or expired.",
-        response.status,
-      );
-    }
-    let detail = "";
-    try {
-      detail = (await response.text()).trim();
-    } catch {
-      // Body already consumed or unreadable — fall back to the status line only.
-    }
     throw new ZeropsApiError(
-      `Zerops API request failed (${response.status} ${response.statusText})${detail ? `: ${detail}` : ""}`,
+      response.status === 401
+        ? "Your Zerops session has expired. Sign in again."
+        : `Could not read this container's credentials (${response.status}).`,
       response.status,
     );
   }
 
-  return (await response.json()) as T;
-}
-
-/** The org (client) id behind the current token. */
-export interface ZeropsClient {
-  readonly id: string;
-  readonly name: string;
-}
-
-/**
- * The organisations this user belongs to.
- *
- * `/user/info` carries no top-level clientId: membership lives in
- * `clientUserList`, and a user can belong to more than one org, so callers
- * must handle a list rather than picking the first entry.
- */
-export async function fetchClients(): Promise<ReadonlyArray<ZeropsClient>> {
-  const info = await zeropsFetch<ZeropsUserInfoResponse>("/api/rest/public/user/info");
-  const memberships = info.clientUserList ?? [];
-  const clients = memberships
-    .map((m) => ({
-      id: m.clientId ?? m.client?.id ?? "",
-      name: m.client?.accountName ?? "",
-    }))
-    .filter((c) => c.id.length > 0);
-  if (clients.length === 0) {
-    throw new ZeropsApiError("This Zerops account is not a member of any organisation.");
+  const body = (await response.json()) as ZeropsUserDataResponse;
+  const password = body.list?.find((entry) => entry.key === "VSCODE_PASSWORD")?.content;
+  if (!password) {
+    throw new ZeropsApiError("This container has no VSCODE_PASSWORD set yet.");
   }
-  return clients;
-}
-
-/** Projects owned by the given org. Rows come back without service/subdomain info — resolve those per-project via `fetchProjectDetail` + `fetchServices`. */
-export async function fetchProjects(clientId: string): Promise<ReadonlyArray<ZeropsProject>> {
-  const response = await zeropsFetch<ZeropsProjectSearchResponse>(
-    "/api/rest/public/project/search",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        search: [{ name: "clientId", operator: "eq", value: clientId }],
-      }),
-    },
-  );
-  return response.items.map((item) => ({
-    id: item.id,
-    name: item.name,
-    status: item.status,
-  }));
-}
-
-/** Projects across every org the user belongs to, tagged with their org. */
-export async function fetchAllProjects(): Promise<ReadonlyArray<ZeropsProject>> {
-  const clients = await fetchClients();
-  const perClient = await Promise.all(
-    clients.map(async (client) => {
-      const projects = await fetchProjects(client.id);
-      return projects.map((p) => ({ ...p, clientId: client.id, clientName: client.name }));
-    }),
-  );
-  return perClient.flat();
-}
-
-export async function fetchProjectDetail(projectId: string): Promise<ZeropsProjectDetailResponse> {
-  return zeropsFetch<ZeropsProjectDetailResponse>(`/api/rest/public/project/${projectId}`);
-}
-
-export async function fetchServices(projectId: string): Promise<ReadonlyArray<ZeropsService>> {
-  const response = await zeropsFetch<ZeropsServiceStackResponse>(
-    `/api/rest/public/project/${projectId}/service-stack`,
-  );
-  return response.list;
-}
-
-/** `https://{serviceName}-{subdomainPrefix}-{port}.{ZEROPS_REGION}.zerops.app` */
-export function buildContainerUrl(
-  serviceName: string,
-  subdomainPrefix: string,
-  port: number,
-): string {
-  return `https://${serviceName}-${subdomainPrefix}-${port}.${ZEROPS_REGION}.zerops.app`;
-}
-
-/**
- * Resolves a project's `zcp` service (if any) and its derived container URL.
- * Returns the bare subdomain prefix alongside so callers can show it even
- * when there is no `zcp` service to link it to.
- */
-export async function resolveProjectZcpService(
-  projectId: string,
-): Promise<Pick<ZeropsProject, "subdomainPrefix" | "zcpService">> {
-  const [detail, services] = await Promise.all([
-    fetchProjectDetail(projectId),
-    fetchServices(projectId),
-  ]);
-
-  const subdomainPrefix = detail.zeropsSubdomainHost;
-  const zcpServiceStack = services.find((service) => service.name === "zcp");
-  const firstPort = zcpServiceStack?.ports[0]?.port;
-
-  const zcpService =
-    zcpServiceStack && subdomainPrefix && firstPort
-      ? {
-          name: zcpServiceStack.name,
-          status: zcpServiceStack.status,
-          url: buildContainerUrl(zcpServiceStack.name, subdomainPrefix, firstPort),
-        }
-      : undefined;
-
-  return {
-    ...(subdomainPrefix ? { subdomainPrefix } : {}),
-    ...(zcpService ? { zcpService } : {}),
-  };
-}
-
-export interface ZeropsProjectOverview {
-  readonly id: string;
-  readonly name: string;
-  readonly status: string;
-  readonly subdomainPrefix?: string;
-  readonly services: ReadonlyArray<ZeropsService>;
-}
-
-/** Full detail for the Zerops projects page: project identity plus every service in its stack. */
-export async function fetchProjectOverview(projectId: string): Promise<ZeropsProjectOverview> {
-  const [detail, services] = await Promise.all([
-    fetchProjectDetail(projectId),
-    fetchServices(projectId),
-  ]);
-
-  return {
-    id: detail.id,
-    name: detail.name,
-    status: detail.status,
-    ...(detail.zeropsSubdomainHost ? { subdomainPrefix: detail.zeropsSubdomainHost } : {}),
-    services,
-  };
+  return password;
 }

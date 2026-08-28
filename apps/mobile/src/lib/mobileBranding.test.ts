@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveMobileStageLabel } from "./mobileBranding";
+import {
+  MOBILE_APP_NAME,
+  MOBILE_AUTH_CLIENT_LABEL,
+  resolveMobileStageLabel,
+} from "./mobileBranding";
+
+it("exposes the Zerops mobile product identity", () => {
+  expect(MOBILE_APP_NAME).toBe("Zerops Code");
+  expect(MOBILE_AUTH_CLIENT_LABEL).toBe("Zerops Code Mobile");
+});
 
 describe("resolveMobileStageLabel", () => {
   it.each([

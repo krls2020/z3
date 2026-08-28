@@ -24,8 +24,10 @@ export const MOBILE_THEME_OPTIONS: ReadonlyArray<{
   readonly id: MobileThemeId;
   readonly label: string;
 }> = [
-  { id: DEFAULT_MOBILE_THEME_ID, label: "T3 Code" },
-  ...BUILT_IN_THEMES.map((theme) => ({ id: theme.id as MobileThemeId, label: theme.label })),
+  { id: DEFAULT_MOBILE_THEME_ID, label: "Zerops Code" },
+  ...BUILT_IN_THEMES.filter((theme) =>
+    (MOBILE_THEME_IDS as readonly string[]).includes(theme.id),
+  ).map((theme) => ({ id: theme.id as MobileThemeId, label: theme.label })),
 ];
 
 type MobileThemeVariable = `--color-${string}`;
