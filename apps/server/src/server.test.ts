@@ -101,6 +101,7 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
+import { resolveZeropsEnvironment } from "./zerops/ZeropsEnvironment.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
@@ -1390,6 +1391,14 @@ const assertBrowserApiCorsPreflightHeaders = (
   ]);
 };
 const crossOriginClientOrigin = "http://remote-client.test:3773";
+
+const zeropsTestEnvironment = (allowedOrigins: ReadonlyArray<string> = []) =>
+  resolveZeropsEnvironment({
+    projectId: "nTV3oMB2SS634ImDJnQckg",
+    apiHost: undefined,
+    allowedOrigins,
+    membershipTtlSeconds: undefined,
+  });
 
 const getWsServerUrl = (
   pathname = "",
@@ -3605,6 +3614,116 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(body.code, "auth_invalid");
       assert.equal(body.reason, "missing_credential");
       assert.equal(typeof body.traceId, "string");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses to open a cookie session inside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const response = yield* HttpClient.post("/api/auth/browser-session", {
+        body: yield* HttpBody.json({ credential: defaultDesktopBootstrapToken }),
+      });
+      const body = yield* responseJsonEffect<{
+        readonly code?: string;
+        readonly reason?: string;
+      }>(response);
+
+      // A cookie is the one credential a browser attaches on its own, so the
+      // Zerops door does not issue any. The credential itself is never even
+      // consumed.
+      assert.equal(response.status, 403);
+      assert.equal(body.code, "operation_forbidden");
+      assert.equal(body.reason, "browser_session_unsupported");
+      assert.equal(response.headers["set-cookie"], undefined);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("stops answering a foreign origin with a wildcard inside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const response = yield* fetchEffect(sessionUrl, {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://evil.example",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "content-type",
+        },
+      });
+
+      // No wildcard, no echo: the browser has nothing to accept.
+      assert.equal(response.headers["access-control-allow-origin"], undefined);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps localhost and configured origins working inside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: { zerops: zeropsTestEnvironment(["https://app.zerops.io"]) },
+      });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      for (const origin of ["http://localhost:5733", "https://app.zerops.io"]) {
+        const response = yield* fetchEffect(sessionUrl, {
+          method: "OPTIONS",
+          headers: {
+            origin,
+            "access-control-request-method": "GET",
+            "access-control-request-headers": "content-type",
+          },
+        });
+        assert.equal(response.status, 204);
+        assert.equal(response.headers["access-control-allow-origin"], origin);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses a websocket upgrade from a foreign origin, before authenticating", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const wsUrl = yield* getHttpServerUrl("/ws");
+      const response = yield* fetchEffect(wsUrl, {
+        headers: { origin: "https://evil.example" },
+      });
+      const body = yield* responseJsonEffect<{
+        readonly code?: string;
+        readonly reason?: string;
+      }>(response);
+
+      // 403, not 401: the origin is refused before any credential is read, so
+      // a foreign page learns nothing about whether it had one.
+      assert.equal(response.status, 403);
+      assert.equal(body.code, "operation_forbidden");
+      assert.equal(body.reason, "origin_not_allowed");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("lets a credential-less upgrade past the origin check to fail on auth", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const wsUrl = yield* getHttpServerUrl("/ws");
+      const response = yield* fetchEffect(wsUrl, {});
+
+      // No Origin: not a browser, so nothing to forge. It fails on the
+      // credential instead, exactly as it does upstream.
+      assert.equal(response.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("leaves the websocket upgrade alone outside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getHttpServerUrl("/ws");
+      const response = yield* fetchEffect(wsUrl, {
+        headers: { origin: "https://evil.example" },
+      });
+
+      assert.equal(response.status, 401);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
