@@ -36,11 +36,3 @@ list the peers.
 **Blocks** Nothing on the product path (S2 auto-bootstraps the `/var/www` project and S4 never opens that dialog), but it may be the first symptom of the `loopback-browser` mis-classification (S0.9 web half) hitting a UI flow.
 **What is known** (2026-08-28) `server.probe`, `server.getConfig`, `orchestration.dispatchCommand` over the same bearer answer instantly; only the folder-browse dialog never resolves (~40 s). Server started with `--host 127.0.0.1`, reached through an SSH tunnel.
 **How to answer** Reproduce once S1's policy override is in (remote-reachable in Zerops mode); if it persists, trace the dialog's RPC (`filesystem.browse`?) in the browser's WS frames.
-
----
-
-### Q-14 · Why did `zerops_deploy` on an unadopted runtime get past the adopt gate?
-
-**Blocks** Nothing in z3, but it contradicts a zcp expectation: `zerops_discover`'s own warning says `zerops_deploy` rejects with `ADOPT_REQUIRED` until adoption completes.
-**What is known** (2026-08-28, S6 UI live pass on `z3-eval`) `zerops_deploy hostname="s3git1"` (an `adoptable`, never-adopted `nodejs@22` with a docusaurus checkout and no `zerops.yaml`) did NOT return `ADOPT_REQUIRED`; it ran the SSH deploy and failed with `SSH_DEPLOY_FAILED` (missing `zerops.yaml`), `failureClass:"network"`. zcp build `21421bb4` (`feat/z3`).
-**How to answer** Reproduce with `zerops_deploy` from a plain `claude -p` on the container against an adoptable service; read the gate in `internal/tools/deploy_*.go` (`ADOPT_REQUIRED` emission) and whether the S6 envelope slice's `withFreshEnvelope`/`rt` threading changed the order of checks. A zcp `/flow` LITE item if it is a regression.
