@@ -4,6 +4,7 @@ import {
   classifyHostedHttpsCompatibility,
   createAdvertisedEndpoint,
   deriveWsBaseUrl,
+  environmentEndpointUrl,
   normalizeHttpBaseUrl,
 } from "./endpoint.ts";
 
@@ -16,10 +17,18 @@ const coreProvider = {
 
 describe("advertised endpoint helpers", () => {
   it("normalizes HTTP and WebSocket base URLs", () => {
-    expect(normalizeHttpBaseUrl("https://example.com/path?x=1#hash")).toBe("https://example.com/");
-    expect(normalizeHttpBaseUrl("wss://example.com/socket")).toBe("https://example.com/");
-    expect(deriveWsBaseUrl("https://example.com/api")).toBe("wss://example.com/");
+    expect(normalizeHttpBaseUrl("https://example.com?x=1#hash")).toBe("https://example.com/");
+    expect(normalizeHttpBaseUrl("wss://example.com")).toBe("https://example.com/");
+    expect(deriveWsBaseUrl("https://example.com")).toBe("wss://example.com/");
     expect(deriveWsBaseUrl("http://127.0.0.1:3773")).toBe("ws://127.0.0.1:3773/");
+  });
+
+  // An endpoint may be reverse-proxied under a path prefix (Zerops serves the
+  // server at <origin>/z3/), so the path is part of the base URL, not noise.
+  it("keeps the path prefix an endpoint is served under", () => {
+    expect(normalizeHttpBaseUrl("https://example.com/z3?x=1#hash")).toBe("https://example.com/z3/");
+    expect(normalizeHttpBaseUrl("wss://example.com/z3/")).toBe("https://example.com/z3/");
+    expect(deriveWsBaseUrl("https://example.com/z3")).toBe("wss://example.com/z3/");
   });
 
   it("marks HTTP endpoints as blocked from hosted HTTPS apps", () => {
@@ -57,5 +66,31 @@ describe("advertised endpoint helpers", () => {
       status: "available",
       isDefault: true,
     });
+  });
+});
+
+describe("environmentEndpointUrl", () => {
+  it("resolves a route against an endpoint served at the origin root", () => {
+    expect(environmentEndpointUrl("https://example.com/", "/api/auth/session")).toBe(
+      "https://example.com/api/auth/session",
+    );
+  });
+
+  it("joins the route onto the prefix instead of replacing the path", () => {
+    expect(environmentEndpointUrl("https://example.com/z3/", "/api/auth/session")).toBe(
+      "https://example.com/z3/api/auth/session",
+    );
+    expect(environmentEndpointUrl("https://example.com/z3", "/.well-known/t3/environment")).toBe(
+      "https://example.com/z3/.well-known/t3/environment",
+    );
+    expect(environmentEndpointUrl("https://example.com/z3/", "/oauth/token")).toBe(
+      "https://example.com/z3/oauth/token",
+    );
+  });
+
+  it("drops a query and fragment carried by the base URL", () => {
+    expect(environmentEndpointUrl("https://example.com/z3/?a=1#frag", "/api/auth/session")).toBe(
+      "https://example.com/z3/api/auth/session",
+    );
   });
 });

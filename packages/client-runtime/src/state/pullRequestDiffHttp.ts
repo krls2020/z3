@@ -1,4 +1,5 @@
 import type { PullRequestDiffInput, PullRequestDiffResult } from "@t3tools/contracts";
+import { withBasePath } from "@t3tools/shared/basePath";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -10,7 +11,7 @@ import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
   executeEnvironmentHttpRequest,
   makeEnvironmentHttpApiClient,
-  makeEnvironmentHttpApiUrlBuilder,
+  makeEnvironmentHttpApiPathBuilder,
   type RemoteEnvironmentRequestError,
 } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
@@ -25,9 +26,10 @@ export const fetchEnvironmentPullRequestDiff = Effect.fn(
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly timeoutMs?: number;
 }) {
-  const requestUrl = makeEnvironmentHttpApiUrlBuilder(
+  const requestUrl = withBasePath(
     input.prepared.httpBaseUrl,
-  ).pullRequests.diff();
+    makeEnvironmentHttpApiPathBuilder().pullRequests.diff(),
+  );
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const headers = yield* buildEnvironmentAuthHeaders(
     input.prepared.httpAuthorization,

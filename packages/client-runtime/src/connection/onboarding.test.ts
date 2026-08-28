@@ -198,8 +198,10 @@ describe("connection onboarding", () => {
         profile: {
           environmentId,
           label: "Renamed environment",
-          httpBaseUrl: "http://100.65.180.100:3773/",
-          wsBaseUrl: "ws://100.65.180.100:3773/",
+          // The path is the prefix the environment is reverse-proxied under, so
+          // it survives normalization instead of collapsing to the origin root.
+          httpBaseUrl: "http://100.65.180.100:3773/path/",
+          wsBaseUrl: "ws://100.65.180.100:3773/path/",
         },
         credential: { token: "bearer-token" },
       });
