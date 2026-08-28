@@ -33,11 +33,13 @@ import * as Stream from "effect/Stream";
 
 import type { ProviderRuntimeEvent, ZeropsTopologySnapshot } from "@t3tools/contracts";
 
+import { ServerConfig } from "../config.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import * as ZeropsCliModule from "./ZeropsCli.ts";
+import { isZeropsEnvironment } from "./ZeropsEnvironment.ts";
 import { ZeropsCli } from "./ZeropsCli.ts";
-import { readZeropsToolCall } from "./toolResult.ts";
+import { readZeropsToolCall } from "./zeropsToolResult.ts";
 
 /**
  * How often the feed re-reads while something is moving. Short on purpose: a
@@ -106,11 +108,17 @@ export interface ZeropsTopologyOptions {
   readonly cli: ZeropsCli["Service"];
   /** The provider runtime bus, for the post-tool nudge. */
   readonly toolEvents: Stream.Stream<ProviderRuntimeEvent>;
+  /**
+   * Whether this server runs inside a Zerops project. False switches the feed
+   * off before it touches anything: on a laptop running T3 there is no project
+   * to read, so probing for a binary there is work with no possible answer.
+   */
+  readonly isZeropsEnvironment: boolean;
 }
 
 export const make = (options: ZeropsTopologyOptions) =>
   Effect.gen(function* () {
-    const { cli, toolEvents } = options;
+    const { cli, toolEvents, isZeropsEnvironment } = options;
     const changes = yield* PubSub.sliding<ZeropsTopologySnapshot>(8);
     const readMutex = yield* Semaphore.make(1);
     const subscribeMutex = yield* Semaphore.make(1);
@@ -124,7 +132,7 @@ export const make = (options: ZeropsTopologyOptions) =>
         warnings: [],
         readAt: startedAt,
       },
-      off: false,
+      off: !isZeropsEnvironment,
       nudgeUntilMs: 0,
       doorbellConnected: false,
     });
@@ -199,9 +207,20 @@ export const make = (options: ZeropsTopologyOptions) =>
       yield* refresh;
     });
 
-    // First read before anything is served, so a client that connects
-    // immediately gets real state rather than an empty placeholder.
-    yield* refresh;
+    if (isZeropsEnvironment) {
+      // First read before anything is served, so a client that connects
+      // immediately gets real state rather than an empty placeholder.
+      yield* refresh;
+    } else {
+      yield* publishIfChanged({
+        available: false,
+        degraded: false,
+        reason: "Not a Zerops environment",
+        services: [],
+        warnings: [],
+        readAt: startedAt,
+      });
+    }
 
     const doorbellLoop = Effect.gen(function* () {
       let attempt = 0;
@@ -287,6 +306,13 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const cli = yield* ZeropsCli;
     const provider = yield* ProviderService;
-    return yield* make({ cli, toolEvents: provider.streamEvents });
+    const config = yield* ServerConfig;
+    return yield* make({
+      cli,
+      toolEvents: provider.streamEvents,
+      // The one rule, owned by ZeropsEnvironment: `T3CODE_ZEROPS_PROJECT_ID`
+      // set and non-empty. Nothing here re-derives it.
+      isZeropsEnvironment: isZeropsEnvironment(config),
+    });
   }),
 ).pipe(Layer.provide(ZeropsCliModule.layer));

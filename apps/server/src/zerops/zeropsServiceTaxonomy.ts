@@ -15,6 +15,16 @@ const ZCP_ADOPTION_STATE = "zcp-self";
 const ZCP_TYPE_PREFIX = "zcp";
 
 /**
+ * A service type can carry an OS prefix — the live platform reports runtimes as
+ * `ubuntu/nodejs@22`, not `nodejs@22`. Managed types use a different separator
+ * (`valkey:single@7.2`), so only a leading `<os>/` segment is stripped.
+ */
+const withoutOsPrefix = (type: string): string => {
+  const separator = type.indexOf("/");
+  return separator < 0 ? type : type.slice(separator + 1);
+};
+
+/**
  * The platform reports some statuses in both a bare and a `SERVICE_`-prefixed
  * spelling (`serviceStackStatusEnum.go`); one settled set serves both.
  */
@@ -51,7 +61,7 @@ export const zeropsServiceGroup = (service: {
 }): ZeropsServiceGroup => {
   if (
     service.adoptionState === ZCP_ADOPTION_STATE ||
-    service.type.toLowerCase().startsWith(ZCP_TYPE_PREFIX)
+    withoutOsPrefix(service.type.toLowerCase()).startsWith(ZCP_TYPE_PREFIX)
   ) {
     return "infrastructure";
   }

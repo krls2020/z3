@@ -2,7 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 
 import type { ItemLifecyclePayload } from "@t3tools/contracts";
 
-import { isZeropsToolName, normalizeZeropsToolName, readZeropsToolCall } from "./toolResult.ts";
+import {
+  isZeropsToolName,
+  normalizeZeropsToolName,
+  readZeropsToolCall,
+} from "./zeropsToolResult.ts";
 
 /**
  * Claude's shape — `ClaudeAdapter.ts:2762-2766`: `data = {toolName, input, result}`

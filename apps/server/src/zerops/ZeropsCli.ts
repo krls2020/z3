@@ -23,7 +23,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import { parseZeropsTopology, type ZeropsTopologyRead } from "./topologyParse.ts";
+import { parseZeropsTopology, type ZeropsTopologyRead } from "./zeropsTopologyParse.ts";
 
 /** The binary `zcp init` installs on every Zerops container. */
 const ZCP_COMMAND = "zcp";

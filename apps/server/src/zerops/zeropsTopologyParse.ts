@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 
 import { ForwardCompatibleArray, type ZeropsProject, type ZeropsService } from "@t3tools/contracts";
 
-import { isSettledZeropsStatus, zeropsServiceGroup } from "./serviceTaxonomy.ts";
+import { isSettledZeropsStatus, zeropsServiceGroup } from "./zeropsServiceTaxonomy.ts";
 
 export interface ZeropsTopologyRead {
   readonly project: ZeropsProject;

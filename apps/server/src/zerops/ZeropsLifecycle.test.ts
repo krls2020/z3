@@ -9,14 +9,14 @@ import type { ItemLifecyclePayload, ProviderRuntimeEvent, ThreadId } from "@t3to
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ZeropsThreadLifecycle from "../persistence/ZeropsThreadLifecycle.ts";
-import { ZEROPS_ENVELOPE_FENCE } from "./envelope.ts";
+import { ZEROPS_ENVELOPE_FENCE } from "./zeropsEnvelope.ts";
 import * as ZeropsLifecycle from "./ZeropsLifecycle.ts";
 
 const THREAD = "thread-1" as ThreadId;
 const OTHER_THREAD = "thread-2" as ThreadId;
 
-const envelopeBlock = (phase: string) =>
-  `## Status\n\nPhase: ${phase}\n\n\`\`\`${ZEROPS_ENVELOPE_FENCE}\n${JSON.stringify({
+const envelopeJsonText = (phase: string) =>
+  JSON.stringify({
     phase,
     environment: "container",
     project: { id: "proj-1", name: "z3-eval" },
@@ -30,7 +30,10 @@ const envelopeBlock = (phase: string) =>
       },
     ],
     generated: "2026-08-28T12:00:00Z",
-  })}\n\`\`\`\n`;
+  });
+
+const envelopeBlock = (phase: string) =>
+  `## Status\n\nPhase: ${phase}\n\n\`\`\`${ZEROPS_ENVELOPE_FENCE}\n${envelopeJsonText(phase)}\n\`\`\`\n`;
 
 let eventCounter = 0;
 
@@ -144,6 +147,26 @@ describe("ZeropsLifecycle", () => {
           "zerops_workflow",
           "zerops_deploy",
         ]);
+      }),
+    ),
+  );
+
+  it.effect("takes the envelope a JSON-document result carries", () =>
+    withLifecycle((lifecycle) =>
+      Effect.gen(function* () {
+        // zerops_deploy returns one JSON document, so it carries the envelope
+        // under a top-level key rather than in a fence.
+        yield* lifecycle.ingest(
+          claudeEvent({
+            toolName: "mcp__zerops__zerops_deploy",
+            text: `{"service":"kanbandev","status":"ok","envelope":${envelopeJsonText(
+              "develop-active",
+            )}}`,
+          }),
+        );
+        const state = yield* lifecycle.get(THREAD);
+        expect(state.envelope?.phase).toBe("develop-active");
+        expect(state.recentTools.at(-1)?.toolName).toBe("zerops_deploy");
       }),
     ),
   );

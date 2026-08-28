@@ -9,12 +9,15 @@
  *
  * Two things are recorded per thread:
  *
- * - **the latest envelope**, from the three tools that carry one
- *   (`zerops_workflow` status / develop start / close — zcp `docs/spec-z3.md`
- *   §1.3). Latest wins; a result with no readable envelope leaves it alone.
- * - **the recent `zerops_*` tool calls**, from ALL of them. Only three carry an
- *   envelope, so without this the strip could not say "deploying" —
- *   `zerops_deploy` returns JSON and no state at all. A log, not a state machine.
+ * - **the latest envelope**, from every tool that carries one — through either
+ *   carrier, the trailing fenced block on a prose result or the top-level
+ *   `envelope` key on a JSON one (zcp `docs/spec-z3.md` §1). Latest wins; a
+ *   result with no readable envelope leaves the previous one alone.
+ * - **the recent `zerops_*` tool calls**, from ALL of them, carrier or not.
+ *   The envelope says where the agent IS; it cannot say what is happening right
+ *   now. A tool that has started and not finished has no result to carry an
+ *   envelope, a failed one carries none by design, and the strip still has to
+ *   read "deploying". A log, not a state machine.
  */
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -43,8 +46,8 @@ import {
 } from "../persistence/ZeropsThreadLifecycle.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
-import { extractZeropsEnvelope } from "./envelope.ts";
-import { readZeropsToolCall } from "./toolResult.ts";
+import { extractZeropsEnvelope } from "./zeropsEnvelope.ts";
+import { readZeropsToolCall } from "./zeropsToolResult.ts";
 
 export class ZeropsLifecycle extends Context.Service<
   ZeropsLifecycle,
