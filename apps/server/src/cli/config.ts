@@ -1,3 +1,4 @@
+import { normalizeBasePath } from "@t3tools/shared/basePath";
 import * as NetService from "@t3tools/shared/Net";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
@@ -16,6 +17,7 @@ import { Argument, Flag } from "effect/unstable/cli";
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+import { resolveZeropsEnvironment } from "../zerops/ZeropsEnvironment.ts";
 
 export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -33,6 +35,12 @@ export const hostFlag = Flag.string("host").pipe(
 export const baseDirFlag = Flag.string("base-dir").pipe(
   Flag.withDescription(
     "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+  ),
+  Flag.optional,
+);
+export const basePathFlag = Flag.string("base-path").pipe(
+  Flag.withDescription(
+    "Public path prefix this server is published under, for example /z3. Routes stay mounted at the root: the reverse proxy is expected to strip the prefix, and the server uses this for the URLs it emits (and tolerates a prefix a proxy forwarded).",
   ),
   Flag.optional,
 );
@@ -104,6 +112,10 @@ const EnvServerConfig = Config.all({
   ),
   port: Config.port("T3CODE_PORT").pipe(Config.option, Config.map(Option.getOrUndefined)),
   host: Config.string("T3CODE_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  basePath: Config.string("T3CODE_BASE_PATH").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   t3Home: Config.string("T3CODE_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devAllowedOrigins: Config.string("T3CODE_DEV_ALLOWED_ORIGINS").pipe(
@@ -114,6 +126,29 @@ const EnvServerConfig = Config.all({
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0),
     ),
+  ),
+  // Zerops container settings. `zeropsProjectId` alone decides whether this is
+  // a Zerops environment (see ZeropsEnvironment); the rest only shape it.
+  zeropsProjectId: Config.string("T3CODE_ZEROPS_PROJECT_ID").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  zeropsApiHost: Config.string("T3CODE_ZEROPS_API_HOST").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  zeropsAllowedOrigins: Config.string("T3CODE_ZEROPS_ALLOWED_ORIGINS").pipe(
+    Config.withDefault(""),
+    Config.map((value) =>
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    ),
+  ),
+  zeropsMembershipTtlSeconds: Config.int("T3CODE_ZEROPS_MEMBERSHIP_TTL_SECONDS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
   ),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
@@ -145,6 +180,7 @@ export interface CliServerFlags {
   readonly mode: Option.Option<ServerConfig.RuntimeMode>;
   readonly port: Option.Option<number>;
   readonly host: Option.Option<string>;
+  readonly basePath: Option.Option<string>;
   readonly baseDir: Option.Option<string>;
   readonly cwd: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
@@ -174,6 +210,7 @@ export const sharedServerCommandFlags = {
   mode: modeFlag,
   port: portFlag,
   host: hostFlag,
+  basePath: basePathFlag,
   baseDir: baseDirFlag,
   cwd: Argument.string("cwd").pipe(
     Argument.withDescription(
@@ -224,6 +261,7 @@ export const resolveServerConfig = (
       mode: flags.mode ?? Option.none(),
       port: flags.port ?? Option.none(),
       host: flags.host ?? Option.none(),
+      basePath: flags.basePath ?? Option.none(),
       baseDir: flags.baseDir ?? Option.none(),
       cwd: flags.cwd ?? Option.none(),
       devUrl: flags.devUrl ?? Option.none(),
@@ -347,6 +385,11 @@ export const resolveServerConfig = (
       ),
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
+    const basePath = normalizeBasePath(
+      Option.getOrUndefined(
+        resolveOptionPrecedence(normalizedFlags.basePath, Option.fromUndefinedOr(env.basePath)),
+      ),
+    );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
     const config: ServerConfig.ServerConfig["Service"] = {
@@ -368,6 +411,7 @@ export const resolveServerConfig = (
       otlpServiceName: env.otlpServiceName,
       mode,
       port,
+      basePath,
       cwd,
       baseDir,
       ...derivedPaths,
@@ -376,6 +420,12 @@ export const resolveServerConfig = (
       staticDir,
       devUrl,
       devAllowedOrigins: env.devAllowedOrigins,
+      zerops: resolveZeropsEnvironment({
+        projectId: env.zeropsProjectId,
+        apiHost: env.zeropsApiHost,
+        allowedOrigins: env.zeropsAllowedOrigins,
+        membershipTtlSeconds: env.zeropsMembershipTtlSeconds,
+      }),
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,
@@ -400,6 +450,7 @@ export const resolveCliAuthConfig = (
       mode: Option.none(),
       port: Option.none(),
       host: Option.none(),
+      basePath: Option.none(),
       baseDir: flags.baseDir,
       cwd: Option.none(),
       devUrl: flags.devUrl ?? Option.none(),

@@ -53,6 +53,8 @@ import {
   renderTerminalQrCode,
   resolveHeadlessConnectionString,
 } from "../startupAccess.ts";
+import { withBasePath } from "@t3tools/shared/basePath";
+
 import { baseDirFlag, DurationFromString } from "./config.ts";
 
 const WELL_KNOWN_ENVIRONMENT_PATH = "/.well-known/t3/environment";
@@ -207,7 +209,7 @@ const probeEnvironmentDescriptor = (
 ): Effect.Effect<EnvironmentProbeResult, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const client = yield* HttpClient.HttpClient;
-    const request = HttpClientRequest.get(new URL(WELL_KNOWN_ENVIRONMENT_PATH, baseUrl).toString());
+    const request = HttpClientRequest.get(withBasePath(baseUrl, WELL_KNOWN_ENVIRONMENT_PATH));
     const response = yield* client.execute(request).pipe(
       Effect.timeout(PAIR_PROBE_TIMEOUT),
       // Transport failure or timeout: nothing (reachable) is listening there.
@@ -335,12 +337,16 @@ const makePairServerConfig = Effect.fn(function* (input: {
     mode: "web",
     port: state.port,
     host: state.host,
+    // `t3 pair` only mints into the running server's database; it emits no
+    // URL through this config, so it needs no prefix of its own.
+    basePath: "",
     cwd: process.cwd(),
     baseDir,
     ...derivedPaths,
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],
+    zerops: undefined,
     noBrowser: true,
     startupPresentation: "headless",
     desktopBootstrapToken: undefined,

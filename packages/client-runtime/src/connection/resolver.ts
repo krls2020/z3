@@ -1,5 +1,6 @@
 import type { AuthClientPresentationMetadata } from "@t3tools/contracts";
 import { RelayEnvironmentConnectScope } from "@t3tools/contracts/relay";
+import { socketUrlFromWsBaseUrl } from "@t3tools/shared/basePath";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -52,10 +53,7 @@ function primarySocketUrl(
   target: PrimaryConnectionTarget,
   clientMetadata: AuthClientPresentationMetadata | undefined,
 ): string {
-  const url = new URL(target.wsBaseUrl);
-  if (url.pathname === "" || url.pathname === "/") {
-    url.pathname = "/ws";
-  }
+  const url = socketUrlFromWsBaseUrl(target.wsBaseUrl);
   appendClientConnectionParams(url, clientMetadata, "direct");
   return url.toString();
 }

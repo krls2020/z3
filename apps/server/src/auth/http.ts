@@ -8,12 +8,14 @@ import {
   AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthTerminalOperateScope,
+  AuthExecOperateScope,
   EnvironmentAuthInvalidError,
   type EnvironmentAuthInvalidReason,
   EnvironmentHttpApi,
   EnvironmentInternalError,
   type EnvironmentInternalErrorReason,
   EnvironmentOperationForbiddenError,
+  type EnvironmentOperationForbiddenReason,
   EnvironmentRequestInvalidError,
   type EnvironmentRequestInvalidReason,
   EnvironmentResourceNotFoundError,
@@ -35,6 +37,8 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
+import * as ServerConfig from "../config.ts";
+import { isZeropsEnvironment } from "../zerops/ZeropsEnvironment.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "../cloud/traceRelayRequest.ts";
 import { deriveAuthClientMetadata } from "./utils.ts";
@@ -125,7 +129,7 @@ export function failEnvironmentScopeRequired(requiredScope: AuthEnvironmentScope
   );
 }
 
-function failEnvironmentOperationForbidden(reason: "current_session_revoke_not_allowed") {
+export function failEnvironmentOperationForbidden(reason: EnvironmentOperationForbiddenReason) {
   return currentEnvironmentTraceId.pipe(
     Effect.flatMap((traceId) =>
       Effect.fail(
@@ -203,6 +207,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
     const sessions = yield* SessionStore.SessionStore;
+    const config = yield* ServerConfig.ServerConfig;
 
     return handlers
       .handle(
@@ -223,6 +228,11 @@ export const authHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.auth.browserSession")(
           function* (args) {
             yield* annotateEnvironmentRequest(args.endpoint.name);
+            if (isZeropsEnvironment(config)) {
+              // Refuse before consuming the credential: a one-time pairing
+              // token spent here would be burned for no session.
+              return yield* failEnvironmentOperationForbidden("browser_session_unsupported");
+            }
             const request = yield* HttpServerRequest.HttpServerRequest;
             const result = yield* serverAuth.createBrowserSession(
               args.payload.credential,
@@ -266,6 +276,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                       AuthOrchestrationReadScope,
                       AuthOrchestrationOperateScope,
                       AuthTerminalOperateScope,
+                      AuthExecOperateScope,
                       AuthReviewWriteScope,
                       AuthAccessReadScope,
                       AuthAccessWriteScope,

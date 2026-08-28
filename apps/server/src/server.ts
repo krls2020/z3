@@ -28,6 +28,7 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { ZeropsLayerLive } from "./zerops/zeropsFeedsLayer.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
@@ -87,6 +88,9 @@ import { ObservabilityLive } from "./observability/Layers/Observability.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
+import * as ZeropsGitSpawner from "./zerops/ZeropsGitSpawner.ts";
+import * as ZeropsRepositorySource from "./zerops/ZeropsRepositorySource.ts";
+import { zeropsHttpApiLayer } from "./zerops/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import {
@@ -423,7 +427,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeBaseDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
@@ -434,6 +438,17 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
+);
+
+/**
+ * The Zerops feeds READ from services the runtime already assembles — the
+ * provider event bus and the sqlite store — so they sit on TOP of it rather
+ * than beside it. Listed among the `provideMerge` calls above they would be
+ * treated as a dependency OF the runtime, and their own requirements would leak
+ * out to every caller instead of being satisfied.
+ */
+const RuntimeDependenciesLive = ZeropsLayerLive.pipe(
+  Layer.provideMerge(RuntimeBaseDependenciesLive),
 );
 
 const commandReadinessLayer = HttpRouter.middleware(
@@ -460,6 +475,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(orchestrationHttpApiLayer),
       Layer.provide(pullRequestHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
+      Layer.provide(zeropsHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),
     otlpTracesProxyRouteLayer,
@@ -689,6 +705,11 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(ApplicationObservabilityLive),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(VcsProcess.layer),
+      // Inside a Zerops container every git spawn above this line is rewritten
+      // into `ssh <service> git -C /var/www …`; everything else, this layer's
+      // own `zcp studio topology` call included, reaches the platform spawner
+      // below unchanged.
+      Layer.provideMerge(ZeropsGitSpawner.layer.pipe(Layer.provide(ZeropsRepositorySource.layer))),
       Layer.provideMerge(PlatformServicesLive),
     );
   }),

@@ -1,5 +1,8 @@
 import { PRIMARY_LOCAL_ENVIRONMENT_ID, type DesktopEnvironmentBootstrap } from "@t3tools/contracts";
+import { withBasePath } from "@t3tools/shared/basePath";
 import * as Schema from "effect/Schema";
+
+import { appBasePathHref } from "../../basePath.ts";
 
 const PrimaryEnvironmentTargetSource = Schema.Literals([
   "configured",
@@ -214,8 +217,12 @@ function resolveConfiguredPrimaryTarget(): PrimaryEnvironmentTarget | null {
 }
 
 function resolveWindowOriginPrimaryTarget(): PrimaryEnvironmentTarget {
+  // The server this bundle talks to lives under the same prefix the bundle is
+  // served under — on Zerops that is <origin>/z3/, where the origin root
+  // belongs to code-server. The origin alone would aim every request at it.
   const url = parseTargetUrl({
-    rawValue: window.location.origin,
+    rawValue: appBasePathHref(),
+    baseUrl: window.location.origin,
     source: "window-origin",
     urlKind: "http-base-url",
   });
@@ -278,11 +285,17 @@ export function resolvePrimaryEnvironmentHttpUrl(
   const primaryTarget = readPrimaryEnvironmentTarget();
 
   const url = parseTargetUrl({
-    rawValue: resolveHttpRequestBaseUrl(primaryTarget),
+    rawValue: withBasePath(
+      parseTargetUrl({
+        rawValue: resolveHttpRequestBaseUrl(primaryTarget),
+        source: primaryTarget.source,
+        urlKind: "http-base-url",
+      }),
+      pathname,
+    ),
     source: primaryTarget.source,
     urlKind: "http-base-url",
   });
-  url.pathname = pathname;
   if (searchParams) {
     url.search = new URLSearchParams(searchParams).toString();
   }

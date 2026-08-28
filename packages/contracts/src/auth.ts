@@ -51,8 +51,15 @@ export type ServerAuthPolicy = typeof ServerAuthPolicy.Type;
  *   shell can pair the renderer without a login screen
  * - `one-time-token`: a short-lived pairing token, suitable for manual pairing
  *   flows such as `/pair?token=...`
+ * - `zerops-identity`: the caller presents a Zerops access token and the server
+ *   proves they are a member of the project this environment runs in. Offered
+ *   only by an environment running inside a Zerops project container.
  */
-export const ServerAuthBootstrapMethod = Schema.Literals(["desktop-bootstrap", "one-time-token"]);
+export const ServerAuthBootstrapMethod = Schema.Literals([
+  "desktop-bootstrap",
+  "one-time-token",
+  "zerops-identity",
+]);
 export type ServerAuthBootstrapMethod = typeof ServerAuthBootstrapMethod.Type;
 
 /**
@@ -81,6 +88,15 @@ export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 export const AuthOrchestrationReadScope = "orchestration:read" as const;
 export const AuthOrchestrationOperateScope = "orchestration:operate" as const;
 export const AuthTerminalOperateScope = "terminal:operate" as const;
+/**
+ * Run a command in the environment's container and read its output.
+ *
+ * Not part of the standard client set: a pairing token handed to a laptop
+ * must not carry it. It is granted where the door already proves the caller
+ * has that reach by other means - a member of the Zerops project this
+ * container belongs to, who can already open a shell in it.
+ */
+export const AuthExecOperateScope = "exec:operate" as const;
 export const AuthReviewWriteScope = "review:write" as const;
 export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
@@ -90,6 +106,7 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
+  AuthExecOperateScope,
   AuthReviewWriteScope,
   AuthAccessReadScope,
   AuthAccessWriteScope,
@@ -152,6 +169,16 @@ export const AuthBrowserSessionRequest = Schema.Struct({
   credential: TrimmedNonEmptyString,
 });
 export type AuthBrowserSessionRequest = typeof AuthBrowserSessionRequest.Type;
+
+/**
+ * A Zerops access token, presented so the environment can prove the caller is
+ * a member of the project it runs in. The server validates it against the
+ * Zerops API and discards it; it is never stored.
+ */
+export const AuthZeropsIdentityRequest = Schema.Struct({
+  token: TrimmedNonEmptyString,
+});
+export type AuthZeropsIdentityRequest = typeof AuthZeropsIdentityRequest.Type;
 
 export const AuthBrowserSessionResult = Schema.Struct({
   authenticated: Schema.Literal(true),

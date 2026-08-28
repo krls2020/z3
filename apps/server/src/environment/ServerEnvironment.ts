@@ -147,6 +147,7 @@ export const make = Effect.gen(function* () {
       arch: platformArch(hostArchitecture),
     },
     serverVersion: packageJson.version,
+    ...(serverConfig.basePath === "" ? {} : { basePath: serverConfig.basePath }),
     capabilities: {
       repositoryIdentity: true,
       connectionProbe: true,

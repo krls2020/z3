@@ -525,4 +525,33 @@ describe("remote environment authorization", () => {
       );
     }),
   );
+
+  // Reverse-proxied under a path prefix, both the ticket request and the socket
+  // route live below it — replacing the pathname would dial the wrong origin
+  // root, and leaving it alone would dial the SPA shell.
+  it.effect("mints the websocket url below the path prefix the environment is served under", () =>
+    Effect.gen(function* () {
+      const fetch = recordedFetch(
+        Response.json(
+          {
+            ticket: "ws-ticket",
+            expiresAt: "2026-05-01T12:05:00.000Z",
+          },
+          { status: 200 },
+        ),
+      );
+
+      const url = yield* resolveRemoteWebSocketConnectionUrl({
+        wsBaseUrl: "wss://remote.example.com/z3/",
+        httpBaseUrl: "https://remote.example.com/z3/",
+        bearerToken: "bearer-token",
+      }).pipe(provideRemoteHttp(fetch.fetchFn));
+
+      expect(url).toBe("wss://remote.example.com/z3/ws?wsTicket=ws-ticket");
+      expectFetchCall(fetch.calls, 1, {
+        url: "https://remote.example.com/z3/api/auth/websocket-ticket",
+        method: "POST",
+      });
+    }),
+  );
 });

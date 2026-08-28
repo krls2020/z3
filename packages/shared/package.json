@@ -219,6 +219,10 @@
       "types": "./src/devProxy.ts",
       "import": "./src/devProxy.ts"
     },
+    "./basePath": {
+      "types": "./src/basePath.ts",
+      "import": "./src/basePath.ts"
+    },
     "./usageMerge": {
       "types": "./src/usageMerge.ts",
       "import": "./src/usageMerge.ts"

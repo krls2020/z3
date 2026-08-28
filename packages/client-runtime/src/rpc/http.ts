@@ -8,6 +8,7 @@ import {
   type EnvironmentResourceNotFoundError,
   type EnvironmentScopeRequiredError,
 } from "@t3tools/contracts";
+import { normalizeBasePath } from "@t3tools/shared/basePath";
 import { httpHeaderRedactionLayer } from "@t3tools/shared/httpObservability";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
@@ -86,9 +87,14 @@ export const remoteHttpClientLayer = (
     httpHeaderRedactionLayer,
   );
 
+/**
+ * The API base an environment answers on, keeping the path prefix it is
+ * reverse-proxied under. `prependUrl` joins the contract's route onto this, so
+ * an environment served at `<origin>/z3/` is reached below the prefix.
+ */
 const remoteApiBaseUrl = (httpBaseUrl: string): string => {
   const url = new URL(httpBaseUrl);
-  url.pathname = "/";
+  url.pathname = `${normalizeBasePath(url.pathname)}/`;
   url.search = "";
   url.hash = "";
   return url.toString();
@@ -99,11 +105,16 @@ export const makeEnvironmentHttpApiClient = (httpBaseUrl: string) =>
     baseUrl: remoteApiBaseUrl(httpBaseUrl),
   });
 
-/** Contract-derived request URLs for authentication proofs, tracing, and structured errors. */
-export const makeEnvironmentHttpApiUrlBuilder = (httpBaseUrl: string) =>
-  HttpApiClient.urlBuilder(EnvironmentHttpApi, {
-    baseUrl: remoteApiBaseUrl(httpBaseUrl),
-  });
+/**
+ * Contract-derived request paths for authentication proofs, tracing, and
+ * structured errors.
+ *
+ * The builder is deliberately base-less: it resolves a route against a base URL
+ * with `new URL`, where a root-absolute contract path would discard the prefix
+ * and leave a DPoP `htu` bound to a URL the request never reaches. Callers join
+ * the path onto the environment's base URL with `withBasePath`.
+ */
+export const makeEnvironmentHttpApiPathBuilder = () => HttpApiClient.urlBuilder(EnvironmentHttpApi);
 
 const failRemoteRequest = (
   requestUrl: string,

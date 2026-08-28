@@ -101,6 +101,7 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ServerConfig from "./config.ts";
+import { resolveZeropsEnvironment } from "./zerops/ZeropsEnvironment.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
@@ -122,6 +123,8 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
+import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -388,6 +391,16 @@ const makeBrowserOtlpPayload = (spanName: string) =>
     return JSON.parse(request.body) as OtlpTracer.TraceData;
   });
 
+/** What the Zerops topology feed reports on a machine with no `zcp` installed. */
+const unavailableZeropsTopology = {
+  available: false,
+  degraded: false,
+  reason: "The zcp binary is not available",
+  services: [],
+  warnings: [],
+  readAt: DateTime.makeUnsafe(0),
+} as const;
+
 const buildAppUnderTest = (options?: {
   config?: Partial<ServerConfig.ServerConfig["Service"]>;
   layers?: {
@@ -429,6 +442,8 @@ const buildAppUnderTest = (options?: {
     desktopTelemetryReceiver?: Partial<
       DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"]
     >;
+    zeropsTopology?: Partial<ZeropsTopology.ZeropsTopology["Service"]>;
+    zeropsLifecycle?: Partial<ZeropsLifecycle.ZeropsLifecycle["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -457,6 +472,7 @@ const buildAppUnderTest = (options?: {
       staticDir: undefined,
       devUrl,
       devAllowedOrigins: [],
+      zerops: undefined,
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: defaultDesktopBootstrapToken,
@@ -464,6 +480,7 @@ const buildAppUnderTest = (options?: {
       logWebSocketEvents: false,
       tailscaleServeEnabled: false,
       tailscaleServePort: 443,
+      basePath: "",
       ...options?.config,
     };
     const layerConfig = ServerConfig.layer(config);
@@ -860,6 +877,33 @@ const buildAppUnderTest = (options?: {
         Layer.mock(BrowserTraceCollector.BrowserTraceCollector)({
           record: () => Effect.void,
           ...options?.layers?.browserTraceCollector,
+        }),
+      ),
+      Layer.provide(
+        // A test machine has no `zcp`, which is exactly the shape the real feed
+        // reports there: unavailable, no errors. Mocked rather than built so the
+        // suite does not spawn a doomed child process per test.
+        Layer.mock(ZeropsTopology.ZeropsTopology)({
+          latest: Effect.succeed(unavailableZeropsTopology),
+          changes: Stream.empty,
+          subscribe: Effect.succeed({
+            latest: unavailableZeropsTopology,
+            changes: Stream.empty,
+          }),
+          refresh: Effect.succeed(unavailableZeropsTopology),
+          ...options?.layers?.zeropsTopology,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ZeropsLifecycle.ZeropsLifecycle)({
+          get: (threadId) => Effect.succeed({ threadId, recentTools: [] }),
+          subscribe: (threadId) =>
+            Effect.succeed({
+              latest: { threadId, recentTools: [] },
+              changes: Stream.empty,
+            }),
+          ingest: () => Effect.void,
+          ...options?.layers?.zeropsLifecycle,
         }),
       ),
       Layer.provide(
@@ -1390,6 +1434,14 @@ const assertBrowserApiCorsPreflightHeaders = (
 };
 const crossOriginClientOrigin = "http://remote-client.test:3773";
 
+const zeropsTestEnvironment = (allowedOrigins: ReadonlyArray<string> = []) =>
+  resolveZeropsEnvironment({
+    projectId: "nTV3oMB2SS634ImDJnQckg",
+    apiHost: undefined,
+    allowedOrigins,
+    membershipTtlSeconds: undefined,
+  });
+
 const getWsServerUrl = (
   pathname = "",
   options?: { authenticated?: boolean; credential?: string },
@@ -1474,6 +1526,73 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({ config: { staticDir } });
 
       const response = yield* HttpClient.get("/");
+      assert.equal(response.status, 200);
+      assert.include(yield* response.text, "router-static-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The SPA catch-all answers 200 text/html for anything it does not recognise,
+  // which turns a misrouted API call into "the app loads and nothing works".
+  // Server routes never fall through to the shell.
+  it.effect("refuses to answer unmatched server routes with the SPA shell", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-router-shell-" });
+      yield* fileSystem.writeFileString(
+        path.join(staticDir, "index.html"),
+        "<html>router-static-ok</html>",
+      );
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      for (const route of ["/api/nope", "/oauth/nope", "/.well-known/nope", "/ws/nope"]) {
+        const response = yield* HttpClient.get(route);
+        assert.equal(response.status, 404, route);
+        assert.include(response.headers["content-type"], "application/json", route);
+      }
+
+      // An app route still gets the shell — that is what the catch-all is for.
+      const appRoute = yield* HttpClient.get("/thread/42");
+      assert.equal(appRoute.status, 200);
+      assert.include(yield* appRoute.text, "router-static-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // The recommended proxy block strips the prefix. One written without its
+  // trailing slash forwards it instead, and every route then misses — so the
+  // server names that mistake rather than serving the shell over it.
+  it.effect("names a forwarded base path instead of answering with the shell", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-router-prefix-" });
+      yield* fileSystem.writeFileString(
+        path.join(staticDir, "index.html"),
+        "<html>router-static-ok</html>",
+      );
+      yield* buildAppUnderTest({ config: { staticDir, basePath: "/z3" } });
+
+      const response = yield* HttpClient.get("/z3/.well-known/t3/environment");
+      assert.equal(response.status, 404);
+      assert.include(response.headers["content-type"], "application/json");
+      assert.include(yield* response.text, "/z3");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("treats a prefix-shaped path as an app route when no prefix is configured", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const staticDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-router-noprefix-",
+      });
+      yield* fileSystem.writeFileString(
+        path.join(staticDir, "index.html"),
+        "<html>router-static-ok</html>",
+      );
+      yield* buildAppUnderTest({ config: { staticDir } });
+
+      const response = yield* HttpClient.get("/z3/thread/42");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
@@ -3607,6 +3726,116 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("refuses to open a cookie session inside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const response = yield* HttpClient.post("/api/auth/browser-session", {
+        body: yield* HttpBody.json({ credential: defaultDesktopBootstrapToken }),
+      });
+      const body = yield* responseJsonEffect<{
+        readonly code?: string;
+        readonly reason?: string;
+      }>(response);
+
+      // A cookie is the one credential a browser attaches on its own, so the
+      // Zerops door does not issue any. The credential itself is never even
+      // consumed.
+      assert.equal(response.status, 403);
+      assert.equal(body.code, "operation_forbidden");
+      assert.equal(body.reason, "browser_session_unsupported");
+      assert.equal(response.headers["set-cookie"], undefined);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("stops answering a foreign origin with a wildcard inside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      const response = yield* fetchEffect(sessionUrl, {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://evil.example",
+          "access-control-request-method": "GET",
+          "access-control-request-headers": "content-type",
+        },
+      });
+
+      // No wildcard, no echo: the browser has nothing to accept.
+      assert.equal(response.headers["access-control-allow-origin"], undefined);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps localhost and configured origins working inside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: { zerops: zeropsTestEnvironment(["https://app.zerops.io"]) },
+      });
+
+      const sessionUrl = yield* getHttpServerUrl("/api/auth/session");
+      for (const origin of ["http://localhost:5733", "https://app.zerops.io"]) {
+        const response = yield* fetchEffect(sessionUrl, {
+          method: "OPTIONS",
+          headers: {
+            origin,
+            "access-control-request-method": "GET",
+            "access-control-request-headers": "content-type",
+          },
+        });
+        assert.equal(response.status, 204);
+        assert.equal(response.headers["access-control-allow-origin"], origin);
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses a websocket upgrade from a foreign origin, before authenticating", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const wsUrl = yield* getHttpServerUrl("/ws");
+      const response = yield* fetchEffect(wsUrl, {
+        headers: { origin: "https://evil.example" },
+      });
+      const body = yield* responseJsonEffect<{
+        readonly code?: string;
+        readonly reason?: string;
+      }>(response);
+
+      // 403, not 401: the origin is refused before any credential is read, so
+      // a foreign page learns nothing about whether it had one.
+      assert.equal(response.status, 403);
+      assert.equal(body.code, "operation_forbidden");
+      assert.equal(body.reason, "origin_not_allowed");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("lets a credential-less upgrade past the origin check to fail on auth", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({ config: { zerops: zeropsTestEnvironment() } });
+
+      const wsUrl = yield* getHttpServerUrl("/ws");
+      const response = yield* fetchEffect(wsUrl, {});
+
+      // No Origin: not a browser, so nothing to forge. It fails on the
+      // credential instead, exactly as it does upstream.
+      assert.equal(response.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("leaves the websocket upgrade alone outside a Zerops project", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getHttpServerUrl("/ws");
+      const response = yield* fetchEffect(wsUrl, {
+        headers: { origin: "https://evil.example" },
+      });
+
+      assert.equal(response.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("issues authenticated one-time pairing credentials for additional clients", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -4870,6 +5099,38 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         type: "keybindingsUpdated",
         payload: { keybindings: [], issues: [] },
       });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("answers zerops.topology.get over the websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const snapshot = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.zeropsTopologyGet]({})),
+      );
+
+      // Off a Zerops container this is the honest answer, and it must not be an
+      // error: a non-Zerops environment simply has no topology feed.
+      assert.equal(snapshot.available, false);
+      assert.equal(snapshot.services.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("answers zerops.lifecycle.get for a thread over the websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const state = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.zeropsLifecycleGet]({ threadId: ThreadId.make("thread-1") }),
+        ),
+      );
+
+      assert.equal(state.threadId, "thread-1");
+      assert.equal(state.recentTools.length, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

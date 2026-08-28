@@ -33,7 +33,9 @@ import * as PairingGrantStore from "./PairingGrantStore.ts";
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
+import * as ServerConfig from "../config.ts";
 import { layerConfig as SqlitePersistenceLayer } from "../persistence/Layers/Sqlite.ts";
+import { withBasePath } from "@t3tools/shared/basePath";
 
 export const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
@@ -192,6 +194,17 @@ export class ServerAuthOtherSessionsRevocationError extends Schema.TaggedErrorCl
   }
 }
 
+export class ServerAuthSubjectSessionsRevocationError extends Schema.TaggedErrorClass<ServerAuthSubjectSessionsRevocationError>()(
+  "ServerAuthSubjectSessionsRevocationError",
+  {
+    ...serverAuthInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to revoke the subject's sessions.";
+  }
+}
+
 export class ServerAuthWebSocketTokenIssueError extends Schema.TaggedErrorClass<ServerAuthWebSocketTokenIssueError>()(
   "ServerAuthWebSocketTokenIssueError",
   {
@@ -319,6 +332,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthSessionsListError,
   ServerAuthSessionRevocationError,
   ServerAuthOtherSessionsRevocationError,
+  ServerAuthSubjectSessionsRevocationError,
   ServerAuthWebSocketTokenIssueError,
   ServerAuthDpopReplayStateRecordError,
   ServerAuthDpopReplayKeyCalculationError,
@@ -467,6 +481,12 @@ export class EnvironmentAuth extends Context.Service<
     readonly revokeOtherSessionsExcept: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<number, ServerAuthInternalError>;
+    /**
+     * Ends every session held by one subject. In a Zerops environment a
+     * subject is one Zerops user, so this is per-user revocation across every
+     * device they signed in from.
+     */
+    readonly revokeBySubject: (subject: string) => Effect.Effect<number, ServerAuthInternalError>;
     readonly listClientSessions: (
       currentSessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthClientSession>, ServerAuthInternalError>;
@@ -555,6 +575,7 @@ function parseDpopToken(request: HttpServerRequest.HttpServerRequest): string | 
 }
 
 export const make = Effect.gen(function* () {
+  const serverConfig = yield* ServerConfig.ServerConfig;
   const policy = yield* EnvironmentAuthPolicy.EnvironmentAuthPolicy;
   const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
   const sessions = yield* SessionStore.SessionStore;
@@ -698,6 +719,14 @@ export const make = Effect.gen(function* () {
             if (!grantedScopes.every((scope) => grant.scopes.includes(scope))) {
               return yield* new ServerAuthScopeNotGrantedError({});
             }
+            // Inside a Zerops project the session's lifetime IS the
+            // membership window: the server holds no Zerops token and the
+            // platform exposes no member list, so membership cannot be
+            // re-checked server-side. When the window lapses the next connect
+            // fails and the client re-mints with the Zerops token it already
+            // holds - and THAT re-mint is the real membership call. Removing a
+            // member therefore ends their access within one window.
+            const sessionTtl = serverConfig.zerops?.membershipTtl;
             return yield* sessions
               .issue({
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
@@ -706,9 +735,11 @@ export const make = Effect.gen(function* () {
                 ...(input?.proofKeyThumbprint
                   ? {
                       proofKeyThumbprint: input.proofKeyThumbprint,
-                      ttl: Duration.hours(1),
+                      ttl: sessionTtl ?? Duration.hours(1),
                     }
-                  : {}),
+                  : sessionTtl
+                    ? { ttl: sessionTtl }
+                    : {}),
                 client: {
                   ...requestMetadata,
                   ...(grant.label ? { label: grant.label } : {}),
@@ -864,6 +895,12 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.revokeOtherSessionsExcept"),
     );
 
+  const revokeBySubject: EnvironmentAuth["Service"]["revokeBySubject"] = (subject) =>
+    sessions.revokeBySubject(subject).pipe(
+      Effect.mapError((cause) => new ServerAuthSubjectSessionsRevocationError({ cause })),
+      Effect.withSpan("EnvironmentAuth.revokeBySubject"),
+    );
+
   const issuePairingCredential: EnvironmentAuth["Service"]["issuePairingCredential"] = (input) =>
     issuePairingCredentialForSubject({
       scopes: input?.scopes ?? AuthStandardClientScopes,
@@ -911,8 +948,7 @@ export const make = Effect.gen(function* () {
   const issueStartupPairingUrl: EnvironmentAuth["Service"]["issueStartupPairingUrl"] = (baseUrl) =>
     issueStartupPairingCredential().pipe(
       Effect.map((issued) => {
-        const url = new URL(baseUrl);
-        url.pathname = "/pair";
+        const url = new URL(withBasePath(baseUrl, "/pair"));
         url.searchParams.delete("token");
         url.hash = new URLSearchParams([["token", issued.credential]]).toString();
         return url.toString();
@@ -975,6 +1011,7 @@ export const make = Effect.gen(function* () {
     listSessions,
     revokeSession,
     revokeOtherSessionsExcept,
+    revokeBySubject,
     listClientSessions,
     revokeClientSession,
     revokeOtherClientSessions,

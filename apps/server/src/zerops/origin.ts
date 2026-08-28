@@ -1,0 +1,97 @@
+/**
+ * Which browser origins may talk to a z3 server running inside a Zerops
+ * project.
+ *
+ * Upstream leaves CORS at a wildcard and puts no `Origin` check on the
+ * websocket upgrade, which is survivable for a loopback server and is not for
+ * one published on the public internet by the container's own nginx. Both
+ * holes are closed by the same list:
+ *
+ * - the container's own origin, matched per request against the host it was
+ *   asked for rather than configured. A client served under `/z3/` is
+ *   same-origin with this API, so this case never appears in CORS at all - it
+ *   exists only on the upgrade, which a browser sends an `Origin` for whether
+ *   or not the request is cross-site.
+ * - `localhost` on any port and either scheme, so a developer's Vite server
+ *   can drive a real container. This is a product-level convenience, not a
+ *   temporary hack, and it deliberately does NOT extend to `127.0.0.1`: the
+ *   trust is on the hostname, the same rule the zcp welcome bridge uses.
+ * - the two desktop shell origins.
+ * - anything named in `T3CODE_ZEROPS_ALLOWED_ORIGINS`, matched exactly.
+ *
+ * A request that carries no `Origin` is allowed to upgrade: a caller that is
+ * not a browser cannot be cross-site request forged, and every script, the
+ * desktop shell and the mobile app arrive that way.
+ *
+ * @module zerops/origin
+ */
+import type { ZeropsEnvironment } from "./ZeropsEnvironment.ts";
+
+/** The custom schemes the packaged desktop renderer is served from. */
+const DESKTOP_SHELL_ORIGINS = ["t3code://app", "t3code-dev://app"] as const;
+
+const parseOrigin = (origin: string): URL | undefined => {
+  try {
+    return new URL(origin);
+  } catch {
+    return undefined;
+  }
+};
+
+export interface ZeropsOriginAllowlist {
+  /**
+   * Cross-origin browser access: CORS. Takes `string | undefined` because that
+   * is how the CORS middleware calls it - a request with no `Origin` header
+   * passes `undefined` straight through, on every response, not just
+   * preflights.
+   */
+  readonly allowsOrigin: (origin: string | undefined) => boolean;
+  /** The websocket upgrade, which also knows the host it was asked for. */
+  readonly allowsUpgrade: (input: {
+    readonly origin: string | undefined;
+    readonly host: string | undefined;
+    readonly forwardedHost?: string | undefined;
+  }) => boolean;
+}
+
+export const makeZeropsOriginAllowlist = (
+  environment: ZeropsEnvironment,
+): ZeropsOriginAllowlist => {
+  const configured = new Set<string>([...environment.allowedOrigins, ...DESKTOP_SHELL_ORIGINS]);
+
+  const allowsOrigin = (origin: string | undefined): boolean => {
+    if (origin === undefined || origin.length === 0) {
+      return false;
+    }
+    if (configured.has(origin)) {
+      return true;
+    }
+    const parsed = parseOrigin(origin);
+    // `hostname`, never a suffix test: `localhost.evil.example` must not pass.
+    return (
+      parsed !== undefined &&
+      parsed.hostname === "localhost" &&
+      (parsed.protocol === "http:" || parsed.protocol === "https:")
+    );
+  };
+
+  const allowsUpgrade: ZeropsOriginAllowlist["allowsUpgrade"] = (input) => {
+    const origin = input.origin?.trim() ?? "";
+    if (origin.length === 0) {
+      return true;
+    }
+    if (allowsOrigin(origin)) {
+      return true;
+    }
+    const parsed = parseOrigin(origin);
+    if (parsed === undefined) {
+      return false;
+    }
+    // Same-origin. `Host` is what the browser asked for and cannot be set by a
+    // cross-origin page; `X-Forwarded-Host` covers the container's nginx,
+    // which terminates the request and rewrites `Host` to the upstream.
+    return parsed.host === input.host || parsed.host === input.forwardedHost;
+  };
+
+  return { allowsOrigin, allowsUpgrade };
+};

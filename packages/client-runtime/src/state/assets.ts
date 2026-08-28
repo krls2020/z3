@@ -4,6 +4,7 @@ import { Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import { withBasePath } from "@t3tools/shared/basePath";
 
 const ASSET_URL_REFRESH_INTERVAL_MS = 30 * 60_000;
 const ASSET_URL_STALE_TIME_MS = 5 * 60_000;
@@ -35,9 +36,14 @@ export function parseAssetCollectionKey(
   }
 }
 
+/**
+ * The server hands back root-absolute asset routes (`/api/assets/...`), so the
+ * route is joined onto the environment's base URL: resolving it with a plain
+ * `new URL` would discard the prefix the environment is proxied under.
+ */
 export function resolveAssetUrl(httpBaseUrl: string, relativeUrl: string): string | null {
   try {
-    return new URL(relativeUrl, httpBaseUrl).toString();
+    return withBasePath(httpBaseUrl, relativeUrl);
   } catch {
     return null;
   }

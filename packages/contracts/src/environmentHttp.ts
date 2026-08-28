@@ -22,6 +22,7 @@ import {
   AuthTokenExchangeRequest,
   AuthSessionState,
   AuthWebSocketTicketResult,
+  AuthZeropsIdentityRequest,
   ServerAuthSessionMethod,
 } from "./auth.ts";
 import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -73,6 +74,9 @@ export type EnvironmentAuthInvalidReason = typeof EnvironmentAuthInvalidReason.T
 
 export const EnvironmentOperationForbiddenReason = Schema.Literals([
   "current_session_revoke_not_allowed",
+  "zerops_project_membership_required",
+  "origin_not_allowed",
+  "browser_session_unsupported",
 ]);
 export type EnvironmentOperationForbiddenReason = typeof EnvironmentOperationForbiddenReason.Type;
 
@@ -90,6 +94,7 @@ export const EnvironmentInternalErrorReason = Schema.Literals([
   "orchestration_snapshot_failed",
   "orchestration_thread_snapshot_failed",
   "orchestration_dispatch_failed",
+  "zerops_membership_check_failed",
   "internal_error",
 ]);
 export type EnvironmentInternalErrorReason = typeof EnvironmentInternalErrorReason.Type;
@@ -184,7 +189,11 @@ export class EnvironmentInternalError extends Schema.TaggedErrorClass<Environmen
   }
 }
 
-export const EnvironmentResourceNotFoundReason = Schema.Literals(["thread_not_found"]);
+export const EnvironmentResourceNotFoundReason = Schema.Literals([
+  "thread_not_found",
+  "zerops_identity_unavailable",
+  "zerops_project_not_found",
+]);
 export type EnvironmentResourceNotFoundReason = typeof EnvironmentResourceNotFoundReason.Type;
 
 export class EnvironmentResourceNotFoundError extends Schema.TaggedErrorClass<EnvironmentResourceNotFoundError>()(
@@ -296,6 +305,9 @@ export class EnvironmentCloudEndpointUnavailableError extends Schema.TaggedError
 }
 const EnvironmentSessionCreationErrors = [
   EnvironmentAuthInvalidError,
+  // An environment can decline to issue cookie sessions at all - the Zerops
+  // door is bearer/DPoP only.
+  EnvironmentOperationForbiddenError,
   EnvironmentInternalError,
 ] as const;
 const EnvironmentTokenExchangeErrors = [
@@ -310,6 +322,15 @@ const EnvironmentScopedOperationErrors = [
 const EnvironmentPairingCredentialErrors = [
   EnvironmentRequestInvalidError,
   ...EnvironmentScopedOperationErrors,
+] as const;
+// The Zerops door answers the platform's own three-way verdict: a bad token is
+// 401, a valid token from someone outside the project is 403, and an
+// environment that is not inside a Zerops project has no such route at all.
+const EnvironmentZeropsIdentityErrors = [
+  EnvironmentAuthInvalidError,
+  EnvironmentOperationForbiddenError,
+  EnvironmentResourceNotFoundError,
+  EnvironmentInternalError,
 ] as const;
 const EnvironmentSessionRevokeErrors = [
   EnvironmentScopeRequiredError,
@@ -607,9 +628,19 @@ export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
     }),
   ) {}
 
+export class EnvironmentZeropsHttpApi extends HttpApiGroup.make("zerops").add(
+  HttpApiEndpoint.post("identity", "/api/auth/zerops-identity", {
+    headers: OptionalDpopProofHeaders,
+    payload: AuthZeropsIdentityRequest,
+    success: AuthPairingCredentialResult,
+    error: EnvironmentZeropsIdentityErrors,
+  }),
+) {}
+
 export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
   .add(EnvironmentPullRequestsHttpApi)
-  .add(EnvironmentConnectHttpApi) {}
+  .add(EnvironmentConnectHttpApi)
+  .add(EnvironmentZeropsHttpApi) {}

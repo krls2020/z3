@@ -45,6 +45,7 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+import { makeZeropsOriginAllowlist } from "./zerops/origin.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -115,6 +116,24 @@ export const browserApiCorsLayer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
+    // A Zerops container is published on the public internet by its own nginx,
+    // so the wildcard every other deployment can live with is a hole here. The
+    // allowlist replaces it, and no cookie ever crosses an origin - the Zerops
+    // door is bearer/DPoP only, so `credentials` stays off.
+    if (config.zerops !== undefined) {
+      const { allowsOrigin } = makeZeropsOriginAllowlist(config.zerops);
+      // HttpRouter.cors narrows allowedOrigins to a list; the middleware it
+      // wraps takes a predicate, which is what a per-port localhost rule needs.
+      return HttpRouter.middleware(
+        HttpMiddleware.cors({
+          allowedOrigins: allowsOrigin,
+          allowedMethods: browserApiCorsAllowedMethods,
+          allowedHeaders: browserApiCorsAllowedHeaders,
+          maxAge: 600,
+        }),
+        { global: true },
+      );
+    }
     // Dev uses credentialed requests from Vite or the Electron custom origin, so both must be
     // explicit. Packaged desktop omits credentials and uses Effect's default wildcard origin.
     //
@@ -326,6 +345,12 @@ export const attachmentUploadRouteLayer = HttpRouter.add(
   }),
 );
 
+const notFoundJson = (path: string, detail: string) =>
+  HttpServerResponse.jsonUnsafe({ error: "not_found", path, detail }, { status: 404 });
+
+const isUnderBasePath = (basePath: string, requestPath: string): boolean =>
+  requestPath === basePath || requestPath.startsWith(`${basePath}/`);
+
 export const staticAndDevRouteLayer = HttpRouter.add(
   "GET",
   "*",
@@ -338,8 +363,23 @@ export const staticAndDevRouteLayer = HttpRouter.add(
     }
 
     const config = yield* ServerConfig.ServerConfig;
-    if (config.devUrl && isDevProxiedPath(url.value.pathname)) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
+    const requestPath = url.value.pathname;
+
+    // The catch-all below answers every unrecognised path with the SPA shell,
+    // which is right for app routes and wrong for everything else: a misrouted
+    // API call would come back `200 text/html` and the app would load and do
+    // nothing. These two guards make that class of mistake say so.
+    if (isDevProxiedPath(requestPath)) {
+      return notFoundJson(
+        requestPath,
+        "No server route matches this path. Server routes are never answered with the client shell.",
+      );
+    }
+    if (config.basePath !== "" && isUnderBasePath(config.basePath, requestPath)) {
+      return notFoundJson(
+        requestPath,
+        `This server is published under ${config.basePath} and expects the reverse proxy to strip that prefix before forwarding (an nginx proxy_pass needs its trailing slash). The request still carried it.`,
+      );
     }
 
     if (config.devUrl && isLoopbackHostname(url.value.hostname)) {

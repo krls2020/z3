@@ -7,6 +7,8 @@ import type {
   AdvertisedEndpointStatus,
 } from "@t3tools/contracts";
 
+import { normalizeBasePath } from "./basePath.ts";
+
 export interface CreateAdvertisedEndpointInput {
   readonly id: string;
   readonly label: string;
@@ -33,7 +35,9 @@ export function normalizeHttpBaseUrl(rawValue: string): string {
     throw new Error(`Endpoint must use HTTP or HTTPS. Received ${url.protocol}`);
   }
 
-  url.pathname = "/";
+  // The path is the prefix the environment is reverse-proxied under, not noise:
+  // a server served at `<origin>/z3/` answers nothing at the origin root.
+  url.pathname = `${normalizeBasePath(url.pathname)}/`;
   url.search = "";
   url.hash = "";
   return url.toString();
