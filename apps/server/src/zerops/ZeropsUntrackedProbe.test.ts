@@ -92,7 +92,7 @@ it.layer(VcsProcess.layer.pipe(Layer.provideMerge(NodeServices.layer)))(
         } as never;
 
         const result = yield* captureBaselineAcrossTargets(
-          { store, vcsProcess, probed: new Set<string>() },
+          { store, vcsProcess },
           { targets: [{ cwd, prefix: "" }], checkpointRef: "refs/t3/x/turn/0" as never },
         );
 
