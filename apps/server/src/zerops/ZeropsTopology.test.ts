@@ -287,3 +287,69 @@ describe("ZeropsTopology — the shape ws.ts subscribes through", () => {
     ),
   );
 });
+
+describe("ZeropsTopology — doorbell health on the snapshot", () => {
+  it.effect("reports the doorbell down until it connects, then up", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli(() => Effect.succeed(read(["kanbandev"])));
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
+        });
+
+        // Before the watcher says `connected` the feed is polling, and a client
+        // deserves to know that rather than trusting a map that may be frozen.
+        expect((yield* topology.latest).doorbellConnected).toBe(false);
+
+        yield* fake.ringDoorbell("connected");
+        expect((yield* topology.latest).doorbellConnected).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("republishes when the doorbell drops, so a live map can say it is polling", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli(() => Effect.succeed(read(["kanbandev"])));
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
+        });
+        const subscription = yield* topology.subscribe;
+
+        const seen = yield* Queue.unbounded<boolean | undefined>();
+        yield* Stream.runForEach(subscription.changes, (snapshot) =>
+          Queue.offer(seen, snapshot.doorbellConnected),
+        ).pipe(Effect.forkChild);
+
+        yield* fake.ringDoorbell("connected");
+        expect(yield* Queue.take(seen)).toBe(true);
+
+        // A drop changes nothing about the services, so without the flag in the
+        // published content this transition would never reach a subscriber and
+        // the map would keep claiming to be live.
+        yield* fake.ringDoorbell("disconnected");
+        expect(yield* Queue.take(seen)).toBe(false);
+      }),
+    ),
+  );
+
+  it.effect("says nothing about a doorbell that does not exist", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli(() => Effect.succeed(read(["kanbandev"])));
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: noToolEvents,
+          isZeropsEnvironment: false,
+        });
+        // An unavailable feed has no doorbell to report on; `false` would read
+        // as "the doorbell is down", which is a different claim.
+        expect((yield* topology.latest).doorbellConnected).toBeUndefined();
+      }),
+    ),
+  );
+});

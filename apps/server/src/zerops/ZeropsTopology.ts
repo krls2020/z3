@@ -102,6 +102,10 @@ const contentSignature = (snapshot: ZeropsTopologySnapshot): string =>
     snapshot.project ?? null,
     snapshot.services,
     snapshot.warnings,
+    // Included so a doorbell that drops or recovers reaches subscribers. It
+    // changes nothing about the services, so leaving it out would let the map
+    // keep claiming to be live while the feed had quietly fallen back to polling.
+    snapshot.doorbellConnected ?? null,
   ]);
 
 export interface ZeropsTopologyOptions {
@@ -137,16 +141,35 @@ export const make = (options: ZeropsTopologyOptions) =>
       doorbellConnected: false,
     });
 
+    /**
+     * Stamps the live doorbell state onto every snapshot before publishing, so
+     * no construction site has to remember to carry it, and publishes only when
+     * the content actually moved.
+     */
     const publishIfChanged = (next: ZeropsTopologySnapshot) =>
       Effect.gen(function* () {
-        const previous = (yield* Ref.get(state)).snapshot;
-        const changed = contentSignature(previous) !== contentSignature(next);
-        yield* Ref.update(state, (current) => ({ ...current, snapshot: next }));
+        const current = yield* Ref.get(state);
+        const stamped: ZeropsTopologySnapshot = next.available
+          ? { ...next, doorbellConnected: current.doorbellConnected }
+          : next;
+        const changed = contentSignature(current.snapshot) !== contentSignature(stamped);
+        yield* Ref.update(state, (previous) => ({ ...previous, snapshot: stamped }));
         if (changed) {
-          yield* PubSub.publish(changes, next);
+          yield* PubSub.publish(changes, stamped);
         }
-        return next;
+        return stamped;
       });
+
+    /** Re-publishes the snapshot already held, picking up a changed doorbell state. */
+    const republish = Ref.get(state).pipe(
+      Effect.flatMap((current) => publishIfChanged(current.snapshot)),
+      Effect.asVoid,
+    );
+
+    const setDoorbellConnected = (connected: boolean) =>
+      Ref.update(state, (current) => ({ ...current, doorbellConnected: connected })).pipe(
+        Effect.andThen(republish),
+      );
 
     const refresh: Effect.Effect<ZeropsTopologySnapshot> = readMutex.withPermits(1)(
       Effect.gen(function* () {
@@ -231,19 +254,20 @@ export const make = (options: ZeropsTopologyOptions) =>
         const outcome = yield* Effect.result(
           cli.watchDoorbell((event) =>
             Effect.gen(function* () {
+              const connected = event.type !== "disconnected";
+              // Set before refreshing so the refresh's own publish carries the
+              // new doorbell state — one frame for the two facts, not two.
               yield* Ref.update(state, (current) => ({
                 ...current,
-                doorbellConnected: event.type !== "disconnected",
+                doorbellConnected: connected,
               }));
               // Every ring means "re-read": the event carries no data, and
               // `connected` after a reconnect means we may have missed changes.
-              if (event.type !== "disconnected") {
-                yield* refresh;
-              }
+              yield* connected ? refresh : republish;
             }),
           ),
         );
-        yield* Ref.update(state, (current) => ({ ...current, doorbellConnected: false }));
+        yield* setDoorbellConnected(false);
         if (outcome._tag === "Failure" && outcome.failure._tag === "ZeropsCliNotFound") {
           yield* Ref.update(state, (current) => ({ ...current, off: true }));
           return;

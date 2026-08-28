@@ -118,6 +118,16 @@ export const ZeropsTopologySnapshot = Schema.Struct({
   services: Schema.Array(ZeropsService),
   /** Advisory notes zcp attached to the read (adoptable services, live activity). */
   warnings: Schema.Array(Schema.String),
+  /**
+   * Whether the push channel (`zcp studio watch`) is currently connected.
+   *
+   * `true` — service add/delete reaches the map within about a second.
+   * `false` — the doorbell is down and the feed has fallen back to polling, so
+   * the map is still correct but lags by a few seconds; worth showing.
+   * Absent — there is no doorbell to report on, because the feed is
+   * unavailable. `false` would read as "the doorbell is down", a different claim.
+   */
+  doorbellConnected: Schema.optional(Schema.Boolean),
   /** When this server produced the snapshot. */
   readAt: Schema.DateTimeUtc,
 });
