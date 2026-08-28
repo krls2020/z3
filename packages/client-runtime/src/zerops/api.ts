@@ -12,6 +12,13 @@
  * persisted server-side.
  */
 
+import {
+  buildCreateProjectBody,
+  buildDevelopmentContainerImportBody,
+  buildZcpServiceImportYaml,
+  generateVscodePassword,
+  nextZcpServiceName,
+} from "./newProject.ts";
 import { buildZeropsRegistrationBody, type ZeropsRegistrationInput } from "./registration.ts";
 
 export const DEFAULT_ZEROPS_API_BASE = "https://api.app-prg1.zerops.io";
@@ -419,6 +426,50 @@ export class ZeropsApiClient {
 
   fetchService(serviceId: string): Promise<ZeropsService> {
     return this.#request<ZeropsService>(`/service-stack/${serviceId}`);
+  }
+
+  /**
+   * Creates a project and imports the platform's development-container recipe
+   * into it — the "New project" path, and the same one an exhausted pool
+   * takes.
+   *
+   * The container's `VSCODE_PASSWORD` is generated here and leaves only inside
+   * the import request: it is deliberately absent from the return value, so no
+   * caller can put it on a screen, in a log or in storage.
+   */
+  async createProjectWithZeropsCode(input: {
+    readonly clientId: string;
+    readonly name: string;
+    readonly existingServiceNames?: ReadonlyArray<string>;
+    readonly location?: string;
+    readonly zcpVersion?: string;
+  }): Promise<{ readonly project: ZeropsProject; readonly serviceName: string }> {
+    const project = await this.#request<ZeropsProject>(`/client/${input.clientId}/project`, {
+      method: "POST",
+      body: JSON.stringify(
+        buildCreateProjectBody({
+          clientId: input.clientId,
+          name: input.name,
+          ...(input.location ? { location: input.location } : {}),
+        }),
+      ),
+    });
+
+    const serviceName = nextZcpServiceName(input.existingServiceNames ?? []);
+    await this.#request(`/project/${project.id}/first-class-recipe/development-container`, {
+      method: "PUT",
+      body: JSON.stringify(
+        buildDevelopmentContainerImportBody({
+          serviceImportYaml: buildZcpServiceImportYaml({
+            serviceName,
+            vscodePassword: generateVscodePassword(),
+            ...(input.zcpVersion ? { zcpVersion: input.zcpVersion } : {}),
+          }),
+        }),
+      ),
+    });
+
+    return { project, serviceName };
   }
 
   /**

@@ -41,3 +41,15 @@ export {
   type ZeropsRegistrationBody,
   type ZeropsRegistrationInput,
 } from "./registration.ts";
+
+export {
+  VSCODE_PASSWORD_LENGTH,
+  buildCreateProjectBody,
+  buildDevelopmentContainerImportBody,
+  buildZcpServiceImportYaml,
+  generateVscodePassword,
+  nextZcpServiceName,
+  type CreateProjectBody,
+  type DevelopmentContainerImportBody,
+  type RandomBytes,
+} from "./newProject.ts";
