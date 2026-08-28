@@ -192,6 +192,7 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
+import { ZeropsTopologySnapshot } from "./zerops.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
@@ -320,6 +321,10 @@ export const WS_METHODS = {
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
 
+  // Zerops feeds
+  zeropsTopologyGet: "zerops.topology.get",
+  zeropsTopologyRefresh: "zerops.topology.refresh",
+
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeTerminalEvents: "subscribeTerminalEvents",
@@ -331,6 +336,7 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  subscribeZeropsTopology: "subscribeZeropsTopology",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1017,6 +1023,25 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+export const WsZeropsTopologyGetRpc = Rpc.make(WS_METHODS.zeropsTopologyGet, {
+  payload: Schema.Struct({}),
+  success: ZeropsTopologySnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsZeropsTopologyRefreshRpc = Rpc.make(WS_METHODS.zeropsTopologyRefresh, {
+  payload: Schema.Struct({}),
+  success: ZeropsTopologySnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsSubscribeZeropsTopologyRpc = Rpc.make(WS_METHODS.subscribeZeropsTopology, {
+  payload: Schema.Struct({}),
+  success: ZeropsTopologySnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerGetConfigRpc,
@@ -1112,6 +1137,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsZeropsTopologyGetRpc,
+  WsZeropsTopologyRefreshRpc,
+  WsSubscribeZeropsTopologyRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
