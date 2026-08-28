@@ -16,6 +16,7 @@ import { Argument, Flag } from "effect/unstable/cli";
 import { readBootstrapEnvelope } from "../bootstrap.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+import { resolveZeropsEnvironment } from "../zerops/ZeropsEnvironment.ts";
 
 export const modeFlag = Flag.choice("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -114,6 +115,29 @@ const EnvServerConfig = Config.all({
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0),
     ),
+  ),
+  // Zerops container settings. `zeropsProjectId` alone decides whether this is
+  // a Zerops environment (see ZeropsEnvironment); the rest only shape it.
+  zeropsProjectId: Config.string("T3CODE_ZEROPS_PROJECT_ID").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  zeropsApiHost: Config.string("T3CODE_ZEROPS_API_HOST").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+  zeropsAllowedOrigins: Config.string("T3CODE_ZEROPS_ALLOWED_ORIGINS").pipe(
+    Config.withDefault(""),
+    Config.map((value) =>
+      value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    ),
+  ),
+  zeropsMembershipTtlSeconds: Config.int("T3CODE_ZEROPS_MEMBERSHIP_TTL_SECONDS").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
   ),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
@@ -376,6 +400,12 @@ export const resolveServerConfig = (
       staticDir,
       devUrl,
       devAllowedOrigins: env.devAllowedOrigins,
+      zerops: resolveZeropsEnvironment({
+        projectId: env.zeropsProjectId,
+        apiHost: env.zeropsApiHost,
+        allowedOrigins: env.zeropsAllowedOrigins,
+        membershipTtlSeconds: env.zeropsMembershipTtlSeconds,
+      }),
       noBrowser,
       startupPresentation,
       desktopBootstrapToken,

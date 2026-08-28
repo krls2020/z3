@@ -85,6 +85,7 @@ const makeCliTestServerConfig = (baseDir: string) =>
       staticDir: undefined,
       devUrl: undefined,
       devAllowedOrigins: [],
+      zerops: undefined,
       noBrowser: true,
       startupPresentation: "browser",
       desktopBootstrapToken: undefined,

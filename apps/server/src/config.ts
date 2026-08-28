@@ -16,6 +16,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import { sweepStalePendingAttachments } from "./attachmentStore.ts";
+import type { ZeropsEnvironment } from "./zerops/ZeropsEnvironment.ts";
 
 export const DEFAULT_PORT = 3773;
 
@@ -76,6 +77,12 @@ export class ServerConfig extends Context.Service<
     readonly staticDir: string | undefined;
     readonly devUrl: URL | undefined;
     readonly devAllowedOrigins: ReadonlyArray<string>;
+    /**
+     * Present only inside a Zerops project container. Its presence is the
+     * single rule that turns on every Zerops-specific behaviour - use
+     * `isZeropsEnvironment` rather than testing this field by hand.
+     */
+    readonly zerops: ZeropsEnvironment | undefined;
     readonly noBrowser: boolean;
     readonly startupPresentation: StartupPresentation;
     readonly desktopBootstrapToken: string | undefined;
@@ -206,6 +213,7 @@ const makeTest = Effect.fn("ServerConfig.makeTest")(function* (
     staticDir: undefined,
     devUrl,
     devAllowedOrigins: [],
+    zerops: undefined,
     noBrowser: false,
     startupPresentation: "browser",
   });

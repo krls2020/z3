@@ -50,6 +50,16 @@ const makeCookieRequest = (
     EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]
   >[0];
 
+const makeBearerRequest = (
+  token: string,
+): Parameters<EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]>[0] =>
+  ({
+    cookies: {},
+    headers: { authorization: `Bearer ${token}` },
+  }) as unknown as Parameters<
+    EnvironmentAuth.EnvironmentAuth["Service"]["authenticateHttpRequest"]
+  >[0];
+
 const requestMetadata = {
   deviceType: "desktop" as const,
   os: "macOS",
@@ -262,5 +272,49 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
           }),
         ),
       ),
+  );
+
+  it.effect("revokes every session belonging to one subject and leaves the rest", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      // Two devices for the same Zerops user, one for somebody else.
+      const laptop = yield* serverAuth.issueSession({ subject: "zerops-user-a", label: "laptop" });
+      const phone = yield* serverAuth.issueSession({ subject: "zerops-user-a", label: "phone" });
+      const other = yield* serverAuth.issueSession({ subject: "zerops-user-b", label: "other" });
+
+      const revoked = yield* serverAuth.revokeBySubject("zerops-user-a");
+      expect(revoked).toBe(2);
+
+      const remaining = yield* serverAuth.listSessions();
+      expect(remaining.map((session) => session.sessionId)).toEqual([other.sessionId]);
+
+      // The revoked credentials stop authenticating, not just stop being listed.
+      for (const session of [laptop, phone]) {
+        const error = yield* Effect.flip(
+          serverAuth.authenticateHttpRequest(makeBearerRequest(session.token)),
+        );
+        expect(error._tag).toBe("ServerAuthInvalidCredentialError");
+      }
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("revoking an unknown subject is a no-op, not an error", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      yield* serverAuth.issueSession({ subject: "zerops-user-a" });
+
+      expect(yield* serverAuth.revokeBySubject("nobody")).toBe(0);
+      expect((yield* serverAuth.listSessions()).length).toBe(1);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("counts each session once, however often the subject is revoked", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      yield* serverAuth.issueSession({ subject: "zerops-user-a" });
+
+      expect(yield* serverAuth.revokeBySubject("zerops-user-a")).toBe(1);
+      expect(yield* serverAuth.revokeBySubject("zerops-user-a")).toBe(0);
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 });
