@@ -137,7 +137,12 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
-import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import {
+  failEnvironmentAuthInvalid,
+  failEnvironmentInternal,
+  failEnvironmentOperationForbidden,
+} from "./auth/http.ts";
+import { makeZeropsOriginAllowlist } from "./zerops/origin.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -2495,6 +2500,23 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       "/ws",
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        // Inside a Zerops project this socket is published on the public
+        // internet, so a page on any origin could otherwise open it with a
+        // stolen ticket. The origin is refused before any credential is read,
+        // so a foreign page learns nothing about whether it had one.
+        if (serverConfig.zerops !== undefined) {
+          const { allowsUpgrade } = makeZeropsOriginAllowlist(serverConfig.zerops);
+          if (
+            !allowsUpgrade({
+              origin: request.headers.origin,
+              host: request.headers.host,
+              forwardedHost: request.headers["x-forwarded-host"],
+            })
+          ) {
+            return yield* failEnvironmentOperationForbidden("origin_not_allowed");
+          }
+        }
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
         const analytics = yield* AnalyticsService.AnalyticsService;
@@ -2558,6 +2580,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       }).pipe(
         Effect.catchTags({
           EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+          EnvironmentOperationForbiddenError: HttpServerRespondable.toResponse,
           EnvironmentInternalError: HttpServerRespondable.toResponse,
         }),
       ),
