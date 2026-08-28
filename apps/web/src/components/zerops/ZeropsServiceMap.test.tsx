@@ -54,7 +54,9 @@ describe("ZeropsServiceMap", () => {
     expect(html).toContain("kanbandev");
     expect(html).toContain("nodejs@22");
     expect(html).toContain("postgresql:single@18");
-    expect(html).toContain("mounted");
+    // The mount path itself is the badge's text: where a service is mounted is
+    // the useful half, and a bare "mounted" hid it behind a hover.
+    expect(html).toContain("/var/www/kanbandev");
   });
 
   it("offers Open for a service that has a subdomain", () => {

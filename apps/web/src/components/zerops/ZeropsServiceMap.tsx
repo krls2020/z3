@@ -42,9 +42,9 @@ function ServiceLine({ service, typeLabel }: { service: ZeropsService; typeLabel
         {service.status}
       </Badge>
       {service.mounted ? (
-        <Badge size="sm" variant="secondary" title={service.mountPath}>
+        <Badge size="sm" variant="secondary">
           <FolderOpenIcon />
-          mounted
+          {service.mountPath ?? "mounted"}
         </Badge>
       ) : null}
       {service.subdomainUrl === undefined ? null : (

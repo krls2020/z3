@@ -169,6 +169,7 @@ import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavaila
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { ZeropsPanel } from "./zerops/ZeropsPanel";
+import { ZeropsLifecycleStrip } from "./zerops/ZeropsLifecycleStrip";
 import { useZeropsTopology } from "../zerops/useZeropsFeeds";
 import {
   deriveAgentPanelModel,
@@ -6906,6 +6907,16 @@ function ChatViewContent(props: ChatViewProps) {
             onAddProjectScript={saveProjectScript}
             onUpdateProjectScript={updateProjectScript}
             onDeleteProjectScript={deleteProjectScript}
+          />
+          {/*
+            The Zerops strip sits beside ChatHeader rather than inside it: the
+            header takes props, and the strip needs the pending-question state
+            that only lives out here. This keeps ChatHeader untouched.
+          */}
+          <ZeropsLifecycleStrip
+            environmentId={activeThread.environmentId}
+            pendingUserInput={activePendingUserInput !== null}
+            threadId={activeThread.id}
           />
         </WorkspacePageHeader>
 
