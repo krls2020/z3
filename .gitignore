@@ -38,3 +38,6 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# hand-delivered dev tarballs (eval/scripts/z3-dev-push.sh in ../zcp)
+/builds/
