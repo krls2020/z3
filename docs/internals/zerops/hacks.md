@@ -404,9 +404,21 @@ midnight; hand delivery means build → try → throw away within minutes.
 start, so any restart replaces the dev binary and `zcp init z3` with it — push again after every
 restart, and restart only to measure S0.2. The web client never goes in (`vite dev` on the
 laptop against the container), so `http://localhost:*` is on the z3 Origin/CORS allowlist.
-**Real fix** the release gate (brief §4a): one release, then the three "naked" acceptances —
-fresh `zcp@1` from the platform recipe answers `/healthz {z3Up:true}`, a restart of an older
-container brings z3 up, a brand-new pool account reaches a thread untouched.
+**Owner decision 2026-08-28 (end of day 1)** hand delivery stays the ONLY channel until
+further notice, and **no zcp release from `main` while the `zcp init z3` step is unconditional**
+(`../zcp/internal/init/init_z3.go`): a release would, on every container restart fleet-wide,
+fetch upstream `t3@0.0.35` (`z3.PackageSpec` — the fork is not published), i.e. no Zerops door
+and no base path. Before anything else ships from `main`, the step needs a gate (opt-in service
+env) or must leave `main`. Direction under consideration, NOT decided: z3 on by default
+everywhere (as the step is now), the bundle fetched from an own GitHub repo with releases in the
+shape of zcp's `install.sh` (not the npm `t3` package), and a hard fork off t3 — own axis, no
+`rebase upstream/main`. **Evening 2026-08-28:** the hard fork is decided and frozen
+(`fork.md`, tag `upstream-base-2026-08-28`); "z3 on by default everywhere" and the bundle channel
+stay open for the release gate.
+**Real fix** the release gate (brief §4a) once the direction above is decided: one release, then
+the three "naked" acceptances — fresh `zcp@1` from the platform recipe answers
+`/healthz {z3Up:true}`, a restart of an older container brings z3 up, a brand-new pool account
+reaches a thread untouched.
 **First used** 2026-08-28 — zcp half verified on `z3-eval` (`zcp version` reports the local
 commit after the push, `zcp init` + `nginx -s reload` clean); z3 half see `verified.md`.
 
