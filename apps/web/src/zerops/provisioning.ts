@@ -30,7 +30,13 @@ export type ProvisioningPhase =
   | "needs-enable"
   | "ready"
   | "timed-out"
-  | "pool-exhausted";
+  | "pool-exhausted"
+  /**
+   * A restart was already tried and the container still predates Zerops
+   * Code: the zcp release running there simply does not carry it yet, so
+   * offering Enable again would only restart it into the same state.
+   */
+  | "not-yet-available";
 
 /**
  * How long each wait is given. The container cap matches the platform GUI's
@@ -75,6 +81,8 @@ export interface ProvisioningState {
   readonly expiredPhase: WaitingPhase | null;
   /** Why the current wait is still going, when the platform said something useful. */
   readonly detail: string | null;
+  /** True once the user has asked for the container to be restarted this wait. */
+  readonly enabled: boolean;
 }
 
 export type ProvisioningEvent =
@@ -100,6 +108,7 @@ function waiting(
     containerServiceId: null,
     containerOrigin: null,
     detail: null,
+    enabled: false,
     ...carry,
     phase,
     waitingFor: WAITING_LABELS[phase],
@@ -111,7 +120,7 @@ function waiting(
 
 function settled(
   state: ProvisioningState,
-  phase: "needs-enable" | "ready" | "pool-exhausted",
+  phase: "needs-enable" | "ready" | "pool-exhausted" | "not-yet-available",
   waitingFor: string,
   nowMs: number,
 ): ProvisioningState {
@@ -146,6 +155,7 @@ export function startProvisioning(input: {
       containerOrigin: null,
       expiredPhase: null,
       detail: null,
+      enabled: false,
     };
   }
   return waiting("awaiting-project", input.nowMs);
@@ -188,6 +198,9 @@ export function advanceProvisioning(
       projectId: state.projectId,
       containerServiceId: state.containerServiceId,
       containerOrigin: state.containerOrigin,
+      // A retry must not forget an enable already tried this wait — otherwise
+      // a retry-into-predates-z3 loop would offer Enable again forever.
+      enabled: state.enabled,
     });
   }
 
@@ -200,6 +213,7 @@ export function advanceProvisioning(
       containerServiceId: state.containerServiceId,
       containerOrigin: state.containerOrigin,
       detail: "The container is restarting",
+      enabled: true,
     });
   }
 
@@ -236,6 +250,17 @@ export function advanceProvisioning(
       return settled(state, "ready", "Zerops Code is ready", nowMs);
     }
     if (event.health === "predates-z3") {
+      // A restart was already tried this wait and the container still
+      // predates Zerops Code: it is not a stale container, it is a zcp
+      // release that does not carry z3 yet — restarting again changes nothing.
+      if (state.enabled) {
+        return settled(
+          state,
+          "not-yet-available",
+          "Zerops Code is not part of this container's zcp release yet",
+          nowMs,
+        );
+      }
       return settled(state, "needs-enable", "This container predates Zerops Code", nowMs);
     }
     // `initializing` and `unreachable` both mean "not yet" — an unreachable

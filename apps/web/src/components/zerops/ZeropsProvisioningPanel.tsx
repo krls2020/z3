@@ -35,10 +35,19 @@ export function ZeropsProvisioningPanel({
   readonly onRetry: () => void;
   readonly onEnable: () => void;
 }) {
+  // A restart was already tried this wait, and the container still predates
+  // Zerops Code: it is not stale, it is a zcp release that does not carry z3
+  // yet, and offering Enable again would only restart it into the same state.
+  const notYetAvailable =
+    state.phase === "not-yet-available" ||
+    (state.phase === "timed-out" && state.expiredPhase === "awaiting-health" && state.enabled);
+
   // A container that never answered is either from before Zerops Code or away;
   // both are fixed by the same restart, so once the health wait has run out
-  // the panel offers it rather than only ever saying "keep waiting".
+  // the panel offers it rather than only ever saying "keep waiting" — unless
+  // a restart already ran and changed nothing.
   const canRestart =
+    !notYetAvailable &&
     state.phase === "timed-out" &&
     state.expiredPhase === "awaiting-health" &&
     state.containerServiceId !== null;
@@ -80,6 +89,13 @@ export function ZeropsProvisioningPanel({
             Enable Zerops Code
           </Button>
         </div>
+      ) : null}
+
+      {notYetAvailable ? (
+        <p className="text-sm text-foreground">
+          Zerops Code is not part of this container&apos;s zcp release yet. It arrives with the next
+          zcp release — come back and press Enable Zerops Code again later.
+        </p>
       ) : null}
 
       {state.phase === "timed-out" ? (

@@ -129,4 +129,43 @@ describe("ZeropsProvisioningPanel", () => {
 
     expect(render(expired)).not.toContain("Enable Zerops Code");
   });
+
+  it("stops offering Enable once a restart already tried it and the container still predates Zerops Code", () => {
+    const needsEnable = advanceProvisioning(
+      awaitingHealth,
+      { kind: "health", health: "predates-z3" },
+      2000,
+    );
+    const enabled = advanceProvisioning(needsEnable, { kind: "enable" }, 3000);
+    const stillOld = advanceProvisioning(enabled, { kind: "health", health: "predates-z3" }, 4000);
+
+    const markup = render(stillOld);
+    expect(stillOld.phase).toBe("not-yet-available");
+    // The button itself is gone; the copy is still allowed to name it, so it
+    // says what to press once the release does carry Zerops Code.
+    expect(markup).not.toContain(">Enable Zerops Code<");
+    expect(markup).toContain("this container");
+    expect(markup).toContain("zcp release yet");
+    expect(markup).not.toMatch(/failed|error/i);
+  });
+
+  it("prefers the same copy when the post-enable health wait times out instead", () => {
+    const needsEnable = advanceProvisioning(
+      awaitingHealth,
+      { kind: "health", health: "predates-z3" },
+      2000,
+    );
+    const enabled = advanceProvisioning(needsEnable, { kind: "enable" }, 3000);
+    const expired = advanceProvisioning(
+      enabled,
+      { kind: "tick" },
+      3000 + PROVISIONING_CAPS["awaiting-health"] + 1,
+    );
+
+    const markup = render(expired);
+    expect(expired.phase).toBe("timed-out");
+    expect(markup).not.toContain(">Enable Zerops Code<");
+    expect(markup).toContain("this container");
+    expect(markup).toContain("zcp release yet");
+  });
 });

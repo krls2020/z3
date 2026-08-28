@@ -224,7 +224,13 @@ function ZeropsProjectsContent() {
             refresh();
           }}
         >
-          {provisioning.state.phase === "ready" ? "Back to projects" : "Stop waiting"}
+          {provisioning.state.phase === "ready" ||
+          provisioning.state.phase === "not-yet-available" ||
+          (provisioning.state.phase === "timed-out" &&
+            provisioning.state.expiredPhase === "awaiting-health" &&
+            provisioning.state.enabled)
+            ? "Back to projects"
+            : "Stop waiting"}
         </Button>
       </div>
     );

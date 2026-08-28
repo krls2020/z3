@@ -329,4 +329,36 @@ describe("enabling Zerops Code on an older container", () => {
     const waiting = reachAwaitingContainer();
     expect(advanceProvisioning(waiting, { kind: "enable" }, 10_000)).toBe(waiting);
   });
+
+  it("marks the state enabled once the user has asked for the restart", () => {
+    expect(reachNeedsEnable().enabled).toBe(false);
+    expect(advanceProvisioning(reachNeedsEnable(), { kind: "enable" }, 50_000).enabled).toBe(true);
+  });
+
+  it("stops offering Enable when the restarted container still predates Zerops Code", () => {
+    const enabled = advanceProvisioning(reachNeedsEnable(), { kind: "enable" }, 50_000);
+    const stillOld = advanceProvisioning(
+      enabled,
+      { kind: "health", health: "predates-z3" },
+      60_000,
+    );
+
+    expect(stillOld.phase).toBe("not-yet-available");
+    expect(stillOld.capMs).toBeNull();
+    // The container it was about is still known, for the copy and any links.
+    expect(stillOld.containerServiceId).toBe("service-1");
+  });
+
+  it("also lands on not-yet-available when the post-enable health wait times out", () => {
+    const enabled = advanceProvisioning(reachNeedsEnable(), { kind: "enable" }, 0);
+    const expired = advanceProvisioning(
+      enabled,
+      { kind: "tick" },
+      PROVISIONING_CAPS["awaiting-health"] + 1,
+    );
+
+    expect(expired.phase).toBe("timed-out");
+    expect(expired.expiredPhase).toBe("awaiting-health");
+    expect(expired.enabled).toBe(true);
+  });
 });
