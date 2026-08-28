@@ -120,6 +120,7 @@ import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -552,6 +553,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
+      const zeropsTopology = yield* ZeropsTopology.ZeropsTopology;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -1760,6 +1762,14 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverRetryResourceTelemetry, resourceTelemetry.retry, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.zeropsTopologyGet]: (_input) =>
+          observeRpcEffect(WS_METHODS.zeropsTopologyGet, zeropsTopology.latest, {
+            "rpc.aggregate": "zerops",
+          }),
+        [WS_METHODS.zeropsTopologyRefresh]: (_input) =>
+          observeRpcEffect(WS_METHODS.zeropsTopologyRefresh, zeropsTopology.refresh, {
+            "rpc.aggregate": "zerops",
+          }),
         [WS_METHODS.serverSignalProcess]: (input) =>
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
@@ -2485,6 +2495,16 @@ const makeWsRpcLayer = (
               ),
             ),
             { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.subscribeZeropsTopology]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeZeropsTopology,
+            Stream.unwrap(
+              Effect.map(zeropsTopology.subscribe, ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "zerops" },
           ),
       });
     }),
