@@ -19,27 +19,14 @@ import * as ServerConfig from "../config.ts";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import {
   annotateEnvironmentRequest,
-  currentEnvironmentTraceId,
   failEnvironmentAuthInvalid,
   failEnvironmentInternal,
   failEnvironmentNotFound,
+  failEnvironmentOperationForbidden,
 } from "../auth/http.ts";
 import { verifyRequestDpopProof } from "../auth/dpop.ts";
 import { isZeropsEnvironment } from "./ZeropsEnvironment.ts";
 import { mintZeropsPairingCredential } from "./ZeropsIdentityGate.ts";
-import { EnvironmentOperationForbiddenError } from "@t3tools/contracts";
-
-const failNotAMember = currentEnvironmentTraceId.pipe(
-  Effect.flatMap((traceId) =>
-    Effect.fail(
-      new EnvironmentOperationForbiddenError({
-        code: "operation_forbidden",
-        reason: "zerops_project_membership_required",
-        traceId,
-      }),
-    ),
-  ),
-);
 
 export const zeropsHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -79,7 +66,9 @@ export const zeropsHttpApiLayer = HttpApiBuilder.group(
         Effect.catchTag("ZeropsInvalidTokenError", () =>
           failEnvironmentAuthInvalid("invalid_credential"),
         ),
-        Effect.catchTag("ZeropsNotAMemberError", () => failNotAMember),
+        Effect.catchTag("ZeropsNotAMemberError", () =>
+          failEnvironmentOperationForbidden("zerops_project_membership_required"),
+        ),
         Effect.catchTag("ZeropsProjectNotFoundError", () =>
           failEnvironmentNotFound("zerops_project_not_found"),
         ),

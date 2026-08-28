@@ -42,8 +42,11 @@ import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
+  formatZeropsServeOutput,
   isWildcardHost,
   issueHeadlessServeAccessInfo,
+  resolveServeConnectionString,
+  resolveStartupAccessMode,
 } from "./startupAccess.ts";
 
 export class ServerRuntimeStartupError extends Schema.TaggedErrorClass<ServerRuntimeStartupError>()(
@@ -493,7 +496,17 @@ export const make = (options?: StartupOptions) =>
             Effect.withSpan("server.startup.heartbeat.record"),
             Effect.ignoreCause({ log: true }),
           );
-          if (serverConfig.startupPresentation === "headless") {
+          const startupAccessMode = resolveStartupAccessMode(serverConfig);
+          if (startupAccessMode === "zerops") {
+            // Neither minting path runs: a credential in this unit's output
+            // would be an admin credential per boot, for anybody who can read
+            // the logs. Members come in through the identity door instead.
+            const connectionString = yield* resolveServeConnectionString();
+            yield* runStartupPhase(
+              "zerops.output",
+              Console.log(formatZeropsServeOutput(connectionString)),
+            );
+          } else if (startupAccessMode === "headless") {
             const accessInfo = yield* issueHeadlessServeAccessInfo();
             yield* runStartupPhase(
               "headless.output",

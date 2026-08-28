@@ -7,6 +7,25 @@ import {
   parsePairingUrl,
 } from "./pairing";
 
+describe("parsePairingUrl path prefix", () => {
+  // A pairing link scanned from a proxied environment is
+  // https://host/z3/pair#token=...; dropping the path would leave a host that
+  // answers with whatever owns the origin root.
+  it("keeps the prefix while dropping the pair route", () => {
+    expect(parsePairingUrl("https://container.example.test/z3/pair#token=abc")).toEqual({
+      host: "https://container.example.test/z3",
+      code: "abc",
+    });
+  });
+
+  it("still reduces a root-served pairing link to its origin", () => {
+    expect(parsePairingUrl("https://container.example.test/pair#token=abc")).toEqual({
+      host: "https://container.example.test",
+      code: "abc",
+    });
+  });
+});
+
 describe("buildPairingUrl", () => {
   it("uses HTTP for a schemeless IP address", () => {
     expect(buildPairingUrl("192.168.1.100:3773", "pairing-token")).toBe(

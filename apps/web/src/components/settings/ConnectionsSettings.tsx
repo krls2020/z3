@@ -17,6 +17,7 @@ import {
   AuthRelayWriteScope,
   AuthReviewWriteScope,
   AuthStandardClientScopes,
+  AuthExecOperateScope,
   AuthTerminalOperateScope,
   type AuthClientSession,
   type AuthEnvironmentScope,
@@ -173,6 +174,11 @@ const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
     scope: AuthTerminalOperateScope,
     title: "Use terminals",
     description: "Create terminals and send input to running shells.",
+  },
+  {
+    scope: AuthExecOperateScope,
+    title: "Run commands",
+    description: "Run a command in the environment and read its output.",
   },
   {
     scope: AuthReviewWriteScope,

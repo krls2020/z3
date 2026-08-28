@@ -9,6 +9,42 @@ import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { cn } from "~/lib/utils";
 
+/**
+ * What a keystroke means for the option list, or undefined when the card should
+ * not claim the key.
+ *
+ * Exported and pure so the rules are tested directly: this card is rendered by
+ * `renderToStaticMarkup` in tests, which cannot press a key.
+ */
+export function pendingUserInputKeyAction(
+  key: string,
+  optionCount: number,
+  highlightedIndex: number,
+): { readonly type: "move" | "select"; readonly index: number } | undefined {
+  if (optionCount <= 0) {
+    return undefined;
+  }
+  if (key === "ArrowDown" || key === "ArrowUp") {
+    const step = key === "ArrowDown" ? 1 : -1;
+    return {
+      type: "move",
+      index: highlightedIndex < 0 ? 0 : (highlightedIndex + step + optionCount) % optionCount,
+    };
+  }
+  if (key === "Enter") {
+    // Enter with nothing highlighted belongs to the composer — that is how a
+    // free-text answer is sent. Only claim it once the cursor is on an option.
+    return highlightedIndex >= 0 && highlightedIndex < optionCount
+      ? { type: "select", index: highlightedIndex }
+      : undefined;
+  }
+  const digit = Number.parseInt(key, 10);
+  if (Number.isNaN(digit) || digit < 1 || digit > 9 || digit > optionCount) {
+    return undefined;
+  }
+  return { type: "select", index: digit - 1 };
+}
+
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
   respondingRequestIds: ApprovalRequestId[];
@@ -74,6 +110,12 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // sending from the composer advances the active question.
   const [collapsedQuestionId, setCollapsedQuestionId] = useState<string | null>(null);
   const isCollapsed = collapsedQuestionId !== null && collapsedQuestionId === activeQuestion?.id;
+  // Arrow-key cursor. The digit shortcuts below cover the first nine options
+  // and need no cursor; this is for reaching the rest, and for anyone who
+  // reads down a list rather than counting it. -1 means "nothing highlighted",
+  // which is the state every question starts in — highlighting the first
+  // option by default would suggest a pre-made choice.
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
 
   useEffect(() => {
     onAdvanceRef.current = onAdvance;
@@ -99,6 +141,12 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     progress.customAnswer,
     progress.selectedOptionLabels,
   ]);
+
+  // A new question starts with nothing highlighted, so a cursor left on
+  // option 3 cannot silently point at a different question's option 3.
+  useEffect(() => {
+    setHighlightedIndex(-1);
+  }, [activeQuestion?.id]);
 
   // Clear auto-advance timer on unmount
   useEffect(() => {
@@ -146,18 +194,24 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       ) {
         return;
       }
-      const digit = Number.parseInt(event.key, 10);
-      if (Number.isNaN(digit) || digit < 1 || digit > 9) return;
-      const optionIndex = digit - 1;
-      if (optionIndex >= activeQuestion.options.length) return;
-      const option = activeQuestion.options[optionIndex];
-      if (!option) return;
+      const action = pendingUserInputKeyAction(
+        event.key,
+        activeQuestion.options.length,
+        highlightedIndex,
+      );
+      if (action === undefined) return;
       event.preventDefault();
+      if (action.type === "move") {
+        setHighlightedIndex(action.index);
+        return;
+      }
+      const option = activeQuestion.options[action.index];
+      if (!option) return;
       handleOptionSelection(activeQuestion.id, option.label);
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [activeQuestion, handleOptionSelection, isCollapsed, isResponding]);
+  }, [activeQuestion, handleOptionSelection, highlightedIndex, isCollapsed, isResponding]);
 
   if (!activeQuestion) {
     return null;
@@ -189,6 +243,15 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         >
           <span className="text-xs font-medium text-muted-foreground group-hover:text-foreground/85">
             {activeQuestion.header}
+          </span>
+          {/* The agent is blocked until this is answered. Saying so in the card
+              matches what the lifecycle strip says in the header, so the two
+              never disagree about whose turn it is. */}
+          <span
+            className="font-medium text-[10px] text-warning-foreground"
+            data-pending-user-input-waiting
+          >
+            waiting for you
           </span>
           {prompt.questions.length > 1 ? (
             <span className="text-[10px] font-medium text-muted-foreground tabular-nums">
@@ -232,11 +295,13 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 isOptimisticallySelected ||
                 (!customAnswerActive && progress.selectedOptionLabels.includes(option.label));
               const shortcutKey = index < 9 ? index + 1 : null;
+              const isHighlighted = index === highlightedIndex;
               const className = cn(
                 "group flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-primary/25",
                 isSelected
                   ? "bg-muted/55 text-foreground"
                   : "bg-transparent text-foreground/85 hover:bg-muted/30",
+                isHighlighted && "ring-1 ring-primary/40",
                 isResponding && "opacity-50 cursor-not-allowed",
                 !isResponding && "cursor-pointer",
               );
@@ -265,6 +330,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 <button
                   key={`${activeQuestion.id}:${option.label}`}
                   type="button"
+                  aria-current={isHighlighted ? "true" : undefined}
                   disabled={isResponding}
                   onClick={() => {
                     handleOptionSelection(activeQuestion.id, option.label);
@@ -275,6 +341,29 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 </button>
               );
             })}
+          </div>
+          {/*
+            Free text already worked — typing in the composer answers the
+            question and overrides any selected option — but nothing on screen
+            said so, so it was reachable only by knowing. This is that
+            affordance, and it doubles as the read-back of what was typed.
+          */}
+          <div
+            className={cn(
+              "mt-1 flex items-center gap-2 rounded-md px-2.5 py-2 text-left",
+              customAnswerActive ? "bg-muted/55 text-foreground" : "text-secondary-label",
+            )}
+            data-pending-user-input-other={customAnswerActive ? "answered" : "empty"}
+          >
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="font-medium text-sm">Other</span>
+              <span className="text-[11px]">
+                {customAnswerActive
+                  ? progress.customAnswer
+                  : "Type your own answer in the composer below."}
+              </span>
+            </div>
+            {customAnswerActive ? <CheckIcon className="size-3.5 shrink-0 text-primary" /> : null}
           </div>
         </div>
       </CollapsiblePanel>

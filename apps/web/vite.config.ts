@@ -10,6 +10,7 @@ import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
+import { normalizeBasePath } from "@t3tools/shared/basePath";
 import { DEV_PROXIED_PATH_PREFIXES } from "@t3tools/shared/devProxy";
 
 import { loadRepoEnv } from "../../scripts/lib/public-config";
@@ -26,6 +27,14 @@ Object.assign(process.env, repoEnv);
 // since the page still loads.
 const isSingleOriginDev = process.env.T3CODE_SINGLE_ORIGIN_DEV === "1";
 
+// The bundle may be hosted under a path prefix rather than at an origin root:
+// Zerops serves the container's server at <origin>/z3/, beside code-server on
+// the same 8080 origin. Every asset reference is root-absolute, so without this
+// the shell loads under the prefix and every asset 404s (or worse, is answered
+// by whatever owns the origin root). Vite exposes the value as
+// `import.meta.env.BASE_URL`, which `src/basePath.ts` reads back at runtime.
+const base = `${normalizeBasePath(process.env.VITE_BASE_PATH)}/`;
+
 const port = Number(process.env.PORT ?? 5733);
 const explicitHost = process.env.HOST?.trim();
 const host = explicitHost || "localhost";
@@ -39,6 +48,9 @@ const configuredRelayTracingUrl = repoEnv.VITE_RELAY_OTLP_TRACES_URL?.trim() || 
 const configuredRelayTracingDataset = repoEnv.VITE_RELAY_OTLP_TRACES_DATASET?.trim() || "";
 const configuredRelayTracingToken = repoEnv.VITE_RELAY_OTLP_TRACES_TOKEN?.trim() || "";
 const configuredHostedAppChannel = process.env.VITE_HOSTED_APP_CHANNEL?.trim() || "";
+// Cloudflare Turnstile on the Zerops sign-up form. Empty means the widget is
+// off and the registration request carries no captcha token at all.
+const configuredZeropsTurnstileSiteKey = repoEnv.VITE_ZEROPS_TURNSTILE_SITE_KEY?.trim() || "";
 const configuredAppVersion = process.env.APP_VERSION?.trim() || pkg.version;
 const configuredHostedAppUrl = (() => {
   const explicitHostedAppUrl = process.env.VITE_HOSTED_APP_URL?.trim();
@@ -153,6 +165,7 @@ const allowedHosts = [".ts.net", ...configuredAllowedHosts];
 
 export default defineConfig(() => {
   return {
+    base,
     assetsInclude: ["**/*.wasm"],
     plugins: [
       devCompressionPlugin(),
@@ -201,6 +214,9 @@ export default defineConfig(() => {
       "import.meta.env.VITE_RELAY_OTLP_TRACES_TOKEN": JSON.stringify(configuredRelayTracingToken),
       "import.meta.env.VITE_HOSTED_APP_URL": JSON.stringify(configuredHostedAppUrl ?? ""),
       "import.meta.env.VITE_HOSTED_APP_CHANNEL": JSON.stringify(configuredHostedAppChannel),
+      "import.meta.env.VITE_ZEROPS_TURNSTILE_SITE_KEY": JSON.stringify(
+        configuredZeropsTurnstileSiteKey,
+      ),
       "import.meta.env.APP_VERSION": JSON.stringify(configuredAppVersion),
     },
     resolve: {

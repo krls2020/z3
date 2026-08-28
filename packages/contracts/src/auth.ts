@@ -88,6 +88,15 @@ export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 export const AuthOrchestrationReadScope = "orchestration:read" as const;
 export const AuthOrchestrationOperateScope = "orchestration:operate" as const;
 export const AuthTerminalOperateScope = "terminal:operate" as const;
+/**
+ * Run a command in the environment's container and read its output.
+ *
+ * Not part of the standard client set: a pairing token handed to a laptop
+ * must not carry it. It is granted where the door already proves the caller
+ * has that reach by other means - a member of the Zerops project this
+ * container belongs to, who can already open a shell in it.
+ */
+export const AuthExecOperateScope = "exec:operate" as const;
 export const AuthReviewWriteScope = "review:write" as const;
 export const AuthAccessReadScope = "access:read" as const;
 export const AuthAccessWriteScope = "access:write" as const;
@@ -97,6 +106,7 @@ export const AuthEnvironmentScope = Schema.Literals([
   AuthOrchestrationReadScope,
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
+  AuthExecOperateScope,
   AuthReviewWriteScope,
   AuthAccessReadScope,
   AuthAccessWriteScope,

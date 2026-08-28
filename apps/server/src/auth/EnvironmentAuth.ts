@@ -35,6 +35,7 @@ import * as SessionStore from "./SessionStore.ts";
 import { verifyRequestDpopProof } from "./dpop.ts";
 import * as ServerConfig from "../config.ts";
 import { layerConfig as SqlitePersistenceLayer } from "../persistence/Layers/Sqlite.ts";
+import { withBasePath } from "@t3tools/shared/basePath";
 
 export const DEFAULT_SESSION_SUBJECT = "cli-issued-session";
 export const INTERNAL_ADMINISTRATIVE_BOOTSTRAP_SUBJECT = "administrative-bootstrap";
@@ -947,8 +948,7 @@ export const make = Effect.gen(function* () {
   const issueStartupPairingUrl: EnvironmentAuth["Service"]["issueStartupPairingUrl"] = (baseUrl) =>
     issueStartupPairingCredential().pipe(
       Effect.map((issued) => {
-        const url = new URL(baseUrl);
-        url.pathname = "/pair";
+        const url = new URL(withBasePath(baseUrl, "/pair"));
         url.searchParams.delete("token");
         url.hash = new URLSearchParams([["token", issued.credential]]).toString();
         return url.toString();

@@ -4,6 +4,7 @@ import { LinkIcon, PlusIcon, RotateCcwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { openCommandPalette } from "../commandPaletteBus";
+import { ZeropsHostedLanding } from "../components/zerops/landing/ZeropsHostedLanding";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
@@ -17,14 +18,23 @@ import {
 } from "../state/entities";
 import { useEnvironments } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
+import { resolveChatIndexView } from "./-chatIndexView";
+import { composeZeropsFirstPrompt } from "~/zerops/composeFirstPrompt";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 
 function ChatIndexRouteView() {
   const { authGateState } = Route.useRouteContext();
   const { environments } = useEnvironments();
 
-  if (authGateState.status === "hosted-static" && environments.length === 0) {
-    return <HostedStaticOnboardingState />;
+  if (
+    resolveChatIndexView({
+      authGateStatus: authGateState.status,
+      environmentCount: environments.length,
+    }) === "zerops-onboarding"
+  ) {
+    // Upstream's empty state is kept whole and handed to the landing, which
+    // offers it as the manual fallback.
+    return <ZeropsHostedLanding manualFallback={<HostedStaticOnboardingState />} />;
   }
 
   return <IndexDraftLanding />;
@@ -58,10 +68,21 @@ function IndexDraftLanding() {
     startingRef.current = true;
     void handleNewThread(scopeProjectRef(mostRecentProject.environmentId, mostRecentProject.id), {
       replace: true,
-    }).catch(() => {
-      startingRef.current = false;
-      setStartState((state) => ({ ...state, failed: true }));
-    });
+    })
+      .then((started) => {
+        // A project reached through the Zerops door opens with zcp's own
+        // introduction already written, once.
+        if (started) {
+          composeZeropsFirstPrompt({
+            environmentId: mostRecentProject.environmentId,
+            draftId: started.draftId,
+          });
+        }
+      })
+      .catch(() => {
+        startingRef.current = false;
+        setStartState((state) => ({ ...state, failed: true }));
+      });
   }, [handleNewThread, mostRecentProject, startState.retryRequest]);
 
   if (!bootstrapped) {

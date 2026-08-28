@@ -229,7 +229,11 @@ the scheme is registered with Clerk for OAuth callbacks and needs external coord
 
 ---
 
-### H-14 · Git checkpointing over sshfs · in place
+### H-14 · Git checkpointing over sshfs · paid back (2026-08-28)
+
+**Paid back by stream S3** (`../z3` branch `z3`, `apps/server/src/zerops/ZeropsGitSpawner.ts` + `ZeropsCheckpointTargets.ts`): git never runs against the mount — every invocation is `ssh <host> git -C /var/www …` over one ControlMaster per host, checkpoints fan out per mounted repository under one ref name, restore leaves untracked files. Live-audited on `z3-eval` (verified.md, "S3 — live audit"): 0 git processes on the container, 0 argv on a mount path. The original text is kept below for the record.
+
+**Superseded:** the original "real fix" below (a local workspace root, mounts as read-only context) is the opposite of the product decision: the workspace IS `/var/www` with the mounted dev services (brief D3/D4), and S0.3 measured the way out — run git ON each dev service over a multiplexed SSH connection (1.37 s per turn vs 12.7 s over the mount). Stream S3 implements that; this entry dies when it lands.
 
 **Where** every turn is bracketed by a git checkpoint on the workspace root
 **Why** Inherited from upstream, which never had network-mounted workspaces.

@@ -14,6 +14,14 @@ describe("settings pairing URL helpers", () => {
     );
   });
 
+  // An endpoint reached through a reverse proxy carries the prefix it is served
+  // under; the /pair route hangs off that prefix, not off the origin root.
+  it("keeps the path prefix an endpoint is served under", () => {
+    expect(resolveDesktopPairingUrl("https://container.example.test/z3/", "PAIRCODE")).toBe(
+      "https://container.example.test/z3/pair#token=PAIRCODE",
+    );
+  });
+
   it("uses hosted pairing URLs for HTTPS endpoints", () => {
     vi.stubEnv("VITE_HOSTED_APP_URL", "https://preview.t3.codes");
 

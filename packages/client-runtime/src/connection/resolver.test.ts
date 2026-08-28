@@ -231,6 +231,25 @@ describe("ConnectionResolver", () => {
     }),
   );
 
+  // The hosted client is served under the same path prefix as the server it
+  // talks to, so the socket route hangs off the prefix, not off the origin root.
+  it.effect("targets the socket route below the primary target's path prefix", () =>
+    Effect.gen(function* () {
+      const brokerLayer = yield* makeDependencies();
+      const broker = yield* ConnectionResolver.ConnectionResolver.pipe(Effect.provide(brokerLayer));
+      const target = new PrimaryConnectionTarget({
+        environmentId: ENVIRONMENT_ID,
+        label: "Primary",
+        httpBaseUrl: "https://container.example.test/z3/",
+        wsBaseUrl: "wss://container.example.test/z3/",
+      });
+
+      expect((yield* broker.prepare(catalogEntry(target))).socketUrl).toBe(
+        "wss://container.example.test/z3/ws?clientSurface=web&clientDeviceType=desktop&connectionMethod=direct",
+      );
+    }),
+  );
+
   it.effect("authorizes a desktop primary environment with its platform bearer token", () =>
     Effect.gen(function* () {
       const bearerInputs = yield* Ref.make<ReadonlyArray<{ token: string; method: string }>>([]);

@@ -17,6 +17,8 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 
+import { type ZeropsActivityResult, readZeropsActivityResult } from "./zerops/activityResult";
+
 import type {
   ChatMessage,
   ProposedPlan,
@@ -78,6 +80,12 @@ export interface WorkLogEntry {
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   toolData?: unknown;
+  /**
+   * The `zerops_*` result this entry carries, when it is a Zerops tool call.
+   * Attached by the server because the slimming pass drops MCP results — see
+   * `zerops/activityResult.ts`. Absent for every other tool.
+   */
+  zeropsResult?: ZeropsActivityResult;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
@@ -1003,6 +1011,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     if (data?.item !== undefined) {
       entry.toolData = data.item;
     }
+  }
+  // Not gated on itemType: Claude types `zerops_delete` as `file_change`, and
+  // the server attaches the result by tool NAME for exactly that reason.
+  const zeropsResult = readZeropsActivityResult(payload?.data);
+  if (zeropsResult !== undefined) {
+    entry.zeropsResult = zeropsResult;
   }
   if (itemType) {
     entry.itemType = itemType;

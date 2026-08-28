@@ -120,6 +120,8 @@ import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
+import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -137,7 +139,14 @@ import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
-import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import {
+  failEnvironmentAuthInvalid,
+  failEnvironmentInternal,
+  failEnvironmentOperationForbidden,
+} from "./auth/http.ts";
+import { makeZeropsOriginAllowlist } from "./zerops/origin.ts";
+import { runExecCommand } from "./zerops/ExecService.ts";
+import * as ProcessRunner from "./processRunner.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { zeropsPolicy } from "./zerops/ZeropsPolicy.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
@@ -548,6 +557,8 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
+      const zeropsTopology = yield* ZeropsTopology.ZeropsTopology;
+      const zeropsLifecycle = yield* ZeropsLifecycle.ZeropsLifecycle;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -1608,6 +1619,10 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "orchestration" },
           ),
+        [WS_METHODS.execRun]: (input) =>
+          observeRpcEffect(WS_METHODS.execRun, runExecCommand(input), {
+            "rpc.aggregate": "exec",
+          }),
         [WS_METHODS.serverProbe]: (_input) =>
           observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {
             "rpc.aggregate": "server",
@@ -1762,6 +1777,18 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverRetryResourceTelemetry]: (_input) =>
           observeRpcEffect(WS_METHODS.serverRetryResourceTelemetry, resourceTelemetry.retry, {
             "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.zeropsTopologyGet]: (_input) =>
+          observeRpcEffect(WS_METHODS.zeropsTopologyGet, zeropsTopology.latest, {
+            "rpc.aggregate": "zerops",
+          }),
+        [WS_METHODS.zeropsTopologyRefresh]: (_input) =>
+          observeRpcEffect(WS_METHODS.zeropsTopologyRefresh, zeropsTopology.refresh, {
+            "rpc.aggregate": "zerops",
+          }),
+        [WS_METHODS.zeropsLifecycleGet]: (input) =>
+          observeRpcEffect(WS_METHODS.zeropsLifecycleGet, zeropsLifecycle.get(input.threadId), {
+            "rpc.aggregate": "zerops",
           }),
         [WS_METHODS.serverSignalProcess]: (input) =>
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
@@ -2489,6 +2516,26 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.subscribeZeropsTopology]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeZeropsTopology,
+            Stream.unwrap(
+              Effect.map(zeropsTopology.subscribe, ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "zerops" },
+          ),
+        [WS_METHODS.subscribeZeropsLifecycle]: (input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeZeropsLifecycle,
+            Stream.unwrap(
+              Effect.map(zeropsLifecycle.subscribe(input.threadId), ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "zerops" },
+          ),
       });
     }),
   );
@@ -2503,6 +2550,23 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       "/ws",
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        // Inside a Zerops project this socket is published on the public
+        // internet, so a page on any origin could otherwise open it with a
+        // stolen ticket. The origin is refused before any credential is read,
+        // so a foreign page learns nothing about whether it had one.
+        if (serverConfig.zerops !== undefined) {
+          const { allowsUpgrade } = makeZeropsOriginAllowlist(serverConfig.zerops);
+          if (
+            !allowsUpgrade({
+              origin: request.headers.origin,
+              host: request.headers.host,
+              forwardedHost: request.headers["x-forwarded-host"],
+            })
+          ) {
+            return yield* failEnvironmentOperationForbidden("origin_not_allowed");
+          }
+        }
         const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
         const sessions = yield* SessionStore.SessionStore;
         const analytics = yield* AnalyticsService.AnalyticsService;
@@ -2530,6 +2594,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
+              Layer.provide(ProcessRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.
@@ -2566,6 +2631,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       }).pipe(
         Effect.catchTags({
           EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+          EnvironmentOperationForbiddenError: HttpServerRespondable.toResponse,
           EnvironmentInternalError: HttpServerRespondable.toResponse,
         }),
       ),

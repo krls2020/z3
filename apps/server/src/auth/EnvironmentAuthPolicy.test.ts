@@ -89,6 +89,11 @@ it.layer(NodeServices.layer)("EnvironmentAuthPolicy.layer", (it) => {
 
       expect(descriptor.policy).toBe("loopback-browser");
       expect(descriptor.bootstrapMethods).toEqual(["one-time-token"]);
+      expect(descriptor.sessionMethods).toEqual([
+        "browser-session-cookie",
+        "bearer-access-token",
+        "dpop-access-token",
+      ]);
       expect(descriptor.sessionCookieName).toMatch(/^t3_session_3773_[a-f0-9]{12}$/);
     }).pipe(
       Effect.provide(
@@ -165,6 +170,10 @@ it.layer(NodeServices.layer)("EnvironmentAuthPolicy.layer", (it) => {
       // The identity door first; the authenticated pairing-token path stays so
       // a signed-in member can still pair a second device.
       expect(descriptor.bootstrapMethods).toEqual(["zerops-identity", "one-time-token"]);
+      // No cookie inside a Zerops project: the hosted client is bearer/DPoP
+      // only, so nothing this server issues can ride a cross-origin request by
+      // itself.
+      expect(descriptor.sessionMethods).toEqual(["bearer-access-token", "dpop-access-token"]);
     }).pipe(
       Effect.provide(
         makeEnvironmentAuthPolicyLayer({

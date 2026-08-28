@@ -8,7 +8,32 @@ import {
   createAssetEnvironmentAtoms,
   InvalidAssetCollectionKeyError,
   parseAssetCollectionKey,
+  resolveAssetUrl,
 } from "./assets.ts";
+
+describe("resolveAssetUrl", () => {
+  it("resolves a server-relative asset route against the environment base", () => {
+    expect(resolveAssetUrl("https://host.example/", "/api/assets/token/file.png")).toBe(
+      "https://host.example/api/assets/token/file.png",
+    );
+  });
+
+  // The route the server hands back is root-absolute, so resolving it with a
+  // plain `new URL` would drop the prefix the environment is proxied under and
+  // point every image and attachment at whoever owns the origin root.
+  it("keeps the path prefix the environment is served under", () => {
+    expect(resolveAssetUrl("https://host.example/z3/", "/api/assets/token/file.png")).toBe(
+      "https://host.example/z3/api/assets/token/file.png",
+    );
+    expect(resolveAssetUrl("https://host.example/z3/", "/api/attachments/upload/payload.sig")).toBe(
+      "https://host.example/z3/api/attachments/upload/payload.sig",
+    );
+  });
+
+  it("returns null for an unusable base URL", () => {
+    expect(resolveAssetUrl("not a url", "/api/assets/token/file.png")).toBeNull();
+  });
+});
 
 describe("asset collection keys", () => {
   it("preserves malformed JSON and its native cause", () => {

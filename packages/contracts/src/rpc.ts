@@ -192,6 +192,7 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
+import { ZeropsLifecycle, ZeropsLifecycleGetInput, ZeropsTopologySnapshot } from "./zerops.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
@@ -204,6 +205,7 @@ import {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import { ExecError, ExecRunInput, ExecRunResult } from "./exec.ts";
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
@@ -247,6 +249,9 @@ export const WS_METHODS = {
   // Review methods
   reviewGetDiffPreview: "review.getDiffPreview",
   reviewGetDiffFileContents: "review.getDiffFileContents",
+
+  // Exec methods
+  execRun: "exec.run",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -320,6 +325,11 @@ export const WS_METHODS = {
   sourceControlCloneRepository: "sourceControl.cloneRepository",
   sourceControlPublishRepository: "sourceControl.publishRepository",
 
+  // Zerops feeds
+  zeropsTopologyGet: "zerops.topology.get",
+  zeropsTopologyRefresh: "zerops.topology.refresh",
+  zeropsLifecycleGet: "zerops.lifecycle.get",
+
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
   subscribeTerminalEvents: "subscribeTerminalEvents",
@@ -331,6 +341,8 @@ export const WS_METHODS = {
   subscribeAuthAccess: "subscribeAuthAccess",
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
+  subscribeZeropsTopology: "subscribeZeropsTopology",
+  subscribeZeropsLifecycle: "subscribeZeropsLifecycle",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -343,6 +355,12 @@ export const WsServerRemoveKeybindingRpc = Rpc.make(WS_METHODS.serverRemoveKeybi
   payload: ServerRemoveKeybindingInput,
   success: ServerRemoveKeybindingResult,
   error: Schema.Union([KeybindingsConfigError, EnvironmentAuthorizationError]),
+});
+
+export const WsExecRunRpc = Rpc.make(WS_METHODS.execRun, {
+  payload: ExecRunInput,
+  success: ExecRunResult,
+  error: Schema.Union([ExecError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerProbeRpc = Rpc.make(WS_METHODS.serverProbe, {
@@ -1017,7 +1035,40 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
   stream: true,
 });
 
+export const WsZeropsTopologyGetRpc = Rpc.make(WS_METHODS.zeropsTopologyGet, {
+  payload: Schema.Struct({}),
+  success: ZeropsTopologySnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsZeropsTopologyRefreshRpc = Rpc.make(WS_METHODS.zeropsTopologyRefresh, {
+  payload: Schema.Struct({}),
+  success: ZeropsTopologySnapshot,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsSubscribeZeropsTopologyRpc = Rpc.make(WS_METHODS.subscribeZeropsTopology, {
+  payload: Schema.Struct({}),
+  success: ZeropsTopologySnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
+export const WsZeropsLifecycleGetRpc = Rpc.make(WS_METHODS.zeropsLifecycleGet, {
+  payload: ZeropsLifecycleGetInput,
+  success: ZeropsLifecycle,
+  error: EnvironmentAuthorizationError,
+});
+
+export const WsSubscribeZeropsLifecycleRpc = Rpc.make(WS_METHODS.subscribeZeropsLifecycle, {
+  payload: ZeropsLifecycleGetInput,
+  success: ZeropsLifecycle,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  WsExecRunRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
@@ -1112,6 +1163,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeAuthAccessRpc,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
+  WsZeropsTopologyGetRpc,
+  WsZeropsTopologyRefreshRpc,
+  WsSubscribeZeropsTopologyRpc,
+  WsZeropsLifecycleGetRpc,
+  WsSubscribeZeropsLifecycleRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

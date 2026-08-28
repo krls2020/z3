@@ -179,6 +179,7 @@ export const make = Effect.gen(function* () {
       arch: platformArch(hostArchitecture),
     },
     serverVersion: packageJson.version,
+    ...(serverConfig.basePath === "" ? {} : { basePath: serverConfig.basePath }),
     capabilities: makeServerEnvironmentCapabilities(yield* zeropsPolicy, { serverSelfUpdate }),
   };
 

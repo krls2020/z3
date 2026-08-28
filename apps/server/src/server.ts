@@ -28,6 +28,7 @@ import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderR
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { ZeropsLayerLive } from "./zerops/zeropsFeedsLayer.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
@@ -426,7 +427,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   ),
 );
 
-const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
+const RuntimeBaseDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.
   Layer.provideMerge(BackgroundLayerLive),
   Layer.provideMerge(ResourceDiagnosticsLayerLive),
@@ -437,6 +438,17 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(RemoteOpenTargets.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
+);
+
+/**
+ * The Zerops feeds READ from services the runtime already assembles — the
+ * provider event bus and the sqlite store — so they sit on TOP of it rather
+ * than beside it. Listed among the `provideMerge` calls above they would be
+ * treated as a dependency OF the runtime, and their own requirements would leak
+ * out to every caller instead of being satisfied.
+ */
+const RuntimeDependenciesLive = ZeropsLayerLive.pipe(
+  Layer.provideMerge(RuntimeBaseDependenciesLive),
 );
 
 const commandReadinessLayer = HttpRouter.middleware(
