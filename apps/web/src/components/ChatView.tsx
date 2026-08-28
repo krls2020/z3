@@ -6912,12 +6912,19 @@ function ChatViewContent(props: ChatViewProps) {
             The Zerops strip sits beside ChatHeader rather than inside it: the
             header takes props, and the strip needs the pending-question state
             that only lives out here. This keeps ChatHeader untouched.
+
+            The panel-layout controls above are absolutely positioned at the
+            header's right edge, so the strip — an ordinary flex child — would
+            run underneath them. It reserves their width exactly when they are
+            on screen, which is the same condition that renders them.
           */}
-          <ZeropsLifecycleStrip
-            environmentId={activeThread.environmentId}
-            pendingUserInput={activePendingUserInput !== null}
-            threadId={activeThread.id}
-          />
+          <div className={cn("flex min-w-0 shrink", !rightPanelOpen && "mr-16")}>
+            <ZeropsLifecycleStrip
+              environmentId={activeThread.environmentId}
+              pendingUserInput={activePendingUserInput !== null}
+              threadId={activeThread.id}
+            />
+          </div>
         </WorkspacePageHeader>
 
         <ThreadErrorBanner
