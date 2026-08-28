@@ -353,3 +353,43 @@ describe("ZeropsTopology — doorbell health on the snapshot", () => {
     ),
   );
 });
+
+describe("ZeropsTopology — more than one subscriber over the server's life", () => {
+  it.effect("still pushes to a subscriber that arrives after an earlier one has gone", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // The live server is long-lived: every websocket connection subscribes
+        // and its scope closes when the socket does. Every earlier test used a
+        // freshly made service with exactly one subscriber, which is the one
+        // case that cannot catch a subscription being shared or reused.
+        // make() takes read 1; the refresh below takes read 2 and must differ,
+        // or there is nothing to publish and the test proves nothing.
+        const fake = yield* makeFakeCli((attempt) =>
+          Effect.succeed(attempt <= 1 ? read(["kanbandev"]) : read(["kanbandev", "db"])),
+        );
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: noToolEvents,
+          isZeropsEnvironment: true,
+        });
+
+        // A first subscriber that comes and goes, like a closed socket.
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const first = yield* topology.subscribe;
+            expect(first.latest.services).toHaveLength(1);
+          }),
+        );
+
+        const second = yield* topology.subscribe;
+        const seen = yield* Queue.unbounded<number>();
+        yield* Stream.runForEach(second.changes, (snapshot) =>
+          Queue.offer(seen, snapshot.services.length),
+        ).pipe(Effect.forkChild);
+
+        yield* topology.refresh;
+        expect(yield* Queue.take(seen)).toBe(2);
+      }),
+    ),
+  );
+});

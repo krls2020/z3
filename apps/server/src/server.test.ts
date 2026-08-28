@@ -5119,6 +5119,65 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("pushes when the change is driven by a refresh RPC on the same socket", () =>
+    Effect.gen(function* () {
+      // The live failure shape: the publish is triggered from inside an RPC
+      // handler's fiber (zerops.topology.refresh), not from the doorbell, and
+      // the subscription that misses it is on the very same socket.
+      const reads = yield* Ref.make(0);
+      const topology = yield* ZeropsTopology.make({
+        isZeropsEnvironment: true,
+        toolEvents: Stream.empty,
+        cli: {
+          readTopology: Ref.updateAndGet(reads, (n) => n + 1).pipe(
+            Effect.map((attempt) => ({
+              project: { id: "p", name: "z3-eval" },
+              services:
+                attempt <= 1
+                  ? [
+                      {
+                        hostname: "s6live3",
+                        serviceId: "svc-1",
+                        type: "valkey:single@7.2",
+                        status: "ACTIVE",
+                        group: "data" as const,
+                        adoptionState: "managed-dep",
+                        isManagedService: true,
+                        transient: false,
+                        mounted: false,
+                      },
+                    ]
+                  : [],
+              warnings: [],
+            })),
+          ),
+          watchDoorbell: () => Effect.never,
+        },
+      });
+
+      yield* buildAppUnderTest({ layers: { zeropsTopology: topology } });
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      const frames = yield* Queue.unbounded<number>();
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            yield* Stream.runForEach(client[WS_METHODS.subscribeZeropsTopology]({}), (snapshot) =>
+              Queue.offer(frames, snapshot.services.length),
+            ).pipe(Effect.forkChild);
+            assert.equal(yield* Queue.take(frames), 1);
+
+            // Read 2 drops the service, so this refresh publishes.
+            const refreshed = yield* client[WS_METHODS.zeropsTopologyRefresh]({});
+            assert.equal(refreshed.services.length, 0);
+
+            assert.equal(yield* Queue.take(frames), 0);
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("pushes a changed topology to an open websocket subscription", () =>
     Effect.gen(function* () {
       // A REAL topology feed over a fake zcp, so the whole path is exercised:
