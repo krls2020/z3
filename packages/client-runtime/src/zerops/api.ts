@@ -1,0 +1,517 @@
+/**
+ * Zerops account client — sign-in, TOTP, refresh, and the read-only project
+ * calls the Zerops Code entry flow needs.
+ *
+ * Deliberately plain async/await (no Effect runtime): this talks to the Zerops
+ * REST API, not to a z3 server, so it needs neither the contracts package nor
+ * the orchestration machinery. It is shared by web and mobile so both clients
+ * hold **one** Zerops auth model.
+ *
+ * The access token stays on the client. It is presented to the Zerops API and,
+ * once per identity bootstrap, to the z3 server — nowhere else, and never
+ * persisted server-side.
+ */
+
+export const DEFAULT_ZEROPS_API_BASE = "https://api.app-prg1.zerops.io";
+
+const PUBLIC_API_PREFIX = "/api/rest/public";
+
+export interface ZeropsSession {
+  readonly accessToken: string;
+  readonly refreshToken?: string;
+  readonly expiresAt?: string;
+  readonly expiresIn?: number;
+  readonly userId?: string;
+  readonly tokenType?: string;
+  /** Set when the account has 2FA enabled; the values are method names ("TOTP"). */
+  readonly twoFAMethods?: ReadonlyArray<string>;
+  /** True only once the second factor has been presented. */
+  readonly twoFAVerified?: boolean;
+  /** One-time secret returned when a recovery code was consumed; never persisted. */
+  readonly newRecoveryToken?: string;
+}
+
+export interface ZeropsClientMembership {
+  readonly id: string;
+  readonly clientId?: string;
+  readonly userId?: string;
+  readonly status?: string;
+  readonly roleCode?: string;
+  readonly client?: {
+    readonly id?: string;
+    readonly accountName?: string;
+    readonly companyName?: string;
+  };
+}
+
+export interface ZeropsUser {
+  readonly id: string;
+  readonly email: string;
+  readonly fullName?: string;
+  readonly clientUserList?: ReadonlyArray<ZeropsClientMembership>;
+}
+
+/** One organization the signed-in account belongs to. */
+export interface ZeropsOrganization {
+  readonly id: string;
+  readonly name: string;
+  readonly membershipId: string;
+  readonly roleCode?: string;
+}
+
+export interface ZeropsProject {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+  readonly clientId?: string;
+  readonly publicZone?: string;
+  readonly zeropsSubdomainHost?: string;
+  readonly mode?: string;
+}
+
+export interface ZeropsServicePort {
+  readonly port: number;
+  readonly protocol?: string;
+  readonly scheme?: string;
+  readonly httpSupport?: boolean;
+}
+
+export interface ZeropsService {
+  readonly id: string;
+  readonly name: string;
+  readonly status: string;
+  readonly isSystem?: boolean;
+  readonly subdomainAccess?: boolean;
+  readonly ports?: ReadonlyArray<ZeropsServicePort>;
+  readonly serviceStackTypeInfo?: {
+    readonly serviceStackTypeName?: string;
+    readonly serviceStackTypeVersionName?: string;
+    readonly serviceStackTypeCategory?: string;
+  };
+}
+
+export interface ZeropsLoginResponse {
+  readonly auth: ZeropsSession;
+  /** Null while a second factor is still outstanding. */
+  readonly user: ZeropsUser | null;
+}
+
+/**
+ * Why a Zerops call failed, in the terms the UI branches on. `expired-session`
+ * means the credential is gone (the client has already signed itself out);
+ * `forbidden` means this account may not touch that resource and the session
+ * is still good.
+ */
+export type ZeropsApiErrorKind =
+  | "network"
+  | "expired-session"
+  | "forbidden"
+  | "not-found"
+  | "invalid-input"
+  | "server"
+  | "unexpected";
+
+export class ZeropsApiError extends Error {
+  readonly kind: ZeropsApiErrorKind;
+  readonly status: number | null;
+  readonly code: string | null;
+
+  constructor(
+    message: string,
+    kind: ZeropsApiErrorKind,
+    status: number | null = null,
+    code: string | null = null,
+  ) {
+    super(message);
+    this.name = "ZeropsApiError";
+    this.kind = kind;
+    this.status = status;
+    this.code = code;
+  }
+}
+
+export function requiresZeropsTwoFactor(session: ZeropsSession | null | undefined): boolean {
+  return !!(
+    session &&
+    session.twoFAMethods &&
+    session.twoFAMethods.length > 0 &&
+    session.twoFAVerified !== true
+  );
+}
+
+export function isZeropsSession(value: unknown): value is ZeropsSession {
+  if (!value || typeof value !== "object") return false;
+  const session = value as Partial<ZeropsSession>;
+  return typeof session.accessToken === "string" && session.accessToken.trim().length > 0;
+}
+
+/** A session that is usable for API calls: present and past any second factor. */
+export function isUsableZeropsSession(value: unknown): value is ZeropsSession {
+  return isZeropsSession(value) && !requiresZeropsTwoFactor(value);
+}
+
+/**
+ * Recovers the region (`"prg1"`, …) from a project's `publicZone`
+ * (`"fte23….prg1-zerops.zone"`). The container origin must never hard-code a
+ * region: `publicZone` already rides in the project detail both clients fetch.
+ * Returns null when the zone does not match the shape.
+ */
+export function zeropsRegionFromPublicZone(publicZone: string): string | null {
+  const match = /\.([a-z0-9-]+)-zerops\.zone$/i.exec(publicZone);
+  return match?.[1] ?? null;
+}
+
+/** The public origin of one service port: `https://<service>-<subdomain>-<port>.<region>.zerops.app`. */
+export function buildZeropsContainerUrl(
+  serviceName: string,
+  subdomainHost: string,
+  port: number,
+  region: string,
+): string {
+  return `https://${serviceName}-${subdomainHost}-${port}.${region}.zerops.app`;
+}
+
+/**
+ * Every org the account is an active member of. An account can belong to
+ * several, so callers fan out over all of them — "the first org" is a bug the
+ * POC shipped once already.
+ */
+export function zeropsClientsFromUser(user: ZeropsUser): ReadonlyArray<ZeropsOrganization> {
+  const seen = new Set<string>();
+  const organizations: ZeropsOrganization[] = [];
+  for (const membership of user.clientUserList ?? []) {
+    if (membership.status && membership.status !== "ACTIVE") continue;
+    const id = membership.clientId ?? membership.client?.id ?? "";
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    organizations.push({
+      id,
+      membershipId: membership.id,
+      name: membership.client?.accountName ?? membership.client?.companyName ?? "Organization",
+      ...(membership.roleCode ? { roleCode: membership.roleCode } : {}),
+    });
+  }
+  return organizations;
+}
+
+type FetchImplementation = (input: string, init?: RequestInit) => Promise<Response>;
+
+function findString(value: unknown, keys: ReadonlyArray<string>): string | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  for (const key of keys) {
+    const candidate = record[key];
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  for (const candidate of Object.values(record)) {
+    const nested = findString(candidate, keys);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function errorKindFor(status: number, code: string | null): ZeropsApiErrorKind {
+  if (status === 401) return "expired-session";
+  if (status === 403) return "forbidden";
+  if (status === 404) return "not-found";
+  if (status === 400) {
+    // The API answers a made-up id with `400 projectNotFound`, so "gone" and
+    // "malformed" have to be separated by the code, not the status.
+    return code && /notFound$/i.test(code) ? "not-found" : "invalid-input";
+  }
+  if (status >= 500) return "server";
+  return "unexpected";
+}
+
+async function apiErrorFromResponse(response: Response): Promise<ZeropsApiError> {
+  let body: unknown = null;
+  try {
+    body = await response.json();
+  } catch {
+    // An empty or non-JSON error response still carries a useful status.
+  }
+  const code = findString(body, ["code", "errorCode"]);
+  const backendMessage = findString(body, ["message", "detail", "description"]);
+  const kind = errorKindFor(response.status, code);
+  const message =
+    kind === "expired-session"
+      ? "Your Zerops session has expired. Sign in again."
+      : kind === "forbidden"
+        ? "This Zerops account is not allowed to do that."
+        : (backendMessage ?? `Zerops API request failed (${response.status}).`);
+  return new ZeropsApiError(message, kind, response.status, code);
+}
+
+export interface ZeropsApiClientOptions {
+  readonly baseUrl?: string;
+  readonly fetch?: FetchImplementation;
+  /** Fired whenever the held session changes — persist it, or clear on null. */
+  readonly onSessionChange?: (session: ZeropsSession | null) => Promise<void> | void;
+}
+
+interface RequestOptions {
+  readonly authenticated?: boolean;
+  readonly retryAfterRefresh?: boolean;
+  readonly unauthorizedMessage?: string;
+}
+
+export interface ListProjectsOptions {
+  readonly statuses?: ReadonlyArray<string>;
+  readonly limit?: number;
+}
+
+/**
+ * Owns request serialization so N parallel 401s cause exactly one refresh, and
+ * so the caller never has to think about the Authorization header.
+ */
+export class ZeropsApiClient {
+  readonly #baseUrl: string;
+  readonly #fetch: FetchImplementation;
+  readonly #onSessionChange: (session: ZeropsSession | null) => Promise<void> | void;
+  #session: ZeropsSession | null = null;
+  #refreshPromise: Promise<ZeropsSession> | null = null;
+
+  constructor(options: ZeropsApiClientOptions = {}) {
+    this.#baseUrl = (options.baseUrl ?? DEFAULT_ZEROPS_API_BASE).replace(/\/+$/, "");
+    // Bound to globalThis on purpose: the browser's `fetch` is brand-checked
+    // against Window, so storing the bare function and calling it as
+    // `this.#fetch(...)` throws "Illegal invocation".
+    this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.#onSessionChange = options.onSessionChange ?? (() => undefined);
+  }
+
+  get session(): ZeropsSession | null {
+    return this.#session;
+  }
+
+  get baseUrl(): string {
+    return this.#baseUrl;
+  }
+
+  /** Adopts a session read back from storage without re-notifying the owner. */
+  restoreSession(session: ZeropsSession): void {
+    this.#session = session;
+  }
+
+  async signOutLocally(): Promise<void> {
+    await this.#setSession(null);
+  }
+
+  async login(email: string, password: string): Promise<ZeropsLoginResponse> {
+    const response = await this.#request<ZeropsLoginResponse>(
+      "/auth/login",
+      { method: "POST", body: JSON.stringify({ email: email.trim(), password }) },
+      {
+        authenticated: false,
+        retryAfterRefresh: false,
+        unauthorizedMessage: "Email or password is incorrect.",
+      },
+    );
+    if (!isZeropsSession(response.auth)) {
+      throw new ZeropsApiError("Zerops returned an invalid sign-in session.", "unexpected");
+    }
+    // A half-session (2FA outstanding) is held in memory so the TOTP call can
+    // authenticate with it; storage refuses it (see session.ts).
+    await this.#setSession(response.auth);
+    return response;
+  }
+
+  async verifyTotp(code: string): Promise<ZeropsSession> {
+    if (!requiresZeropsTwoFactor(this.#session)) {
+      throw new ZeropsApiError(
+        "Start a Zerops sign-in before entering a two-factor code.",
+        "invalid-input",
+      );
+    }
+    const response = await this.#request<{
+      readonly auth: ZeropsSession;
+      readonly newRecoveryToken?: string;
+    }>(
+      "/2fa/totp/login",
+      { method: "POST", body: JSON.stringify({ token: code.trim() }) },
+      {
+        retryAfterRefresh: false,
+        unauthorizedMessage: "The two-factor code was not accepted.",
+      },
+    );
+    const session = response.newRecoveryToken
+      ? { ...response.auth, newRecoveryToken: response.newRecoveryToken }
+      : response.auth;
+    if (!isUsableZeropsSession(session)) {
+      await this.#setSession(null);
+      throw new ZeropsApiError("Zerops returned an invalid two-factor session.", "unexpected");
+    }
+    await this.#setSession(session);
+    return session;
+  }
+
+  async logout(): Promise<void> {
+    try {
+      if (this.#session) {
+        await this.#request(
+          "/auth/logout",
+          { method: "POST", body: JSON.stringify({}) },
+          { retryAfterRefresh: false },
+        );
+      }
+    } finally {
+      await this.#setSession(null);
+    }
+  }
+
+  fetchUser(): Promise<ZeropsUser> {
+    return this.#request<ZeropsUser>("/user/info");
+  }
+
+  async fetchOrganizations(): Promise<ReadonlyArray<ZeropsOrganization>> {
+    return zeropsClientsFromUser(await this.fetchUser());
+  }
+
+  /**
+   * `GET /client/{id}/project` — the direct read. It is lag-free: a project is
+   * visible here before its create call has even returned, while the
+   * Elasticsearch-backed `POST /project/search` trails it. Anything just
+   * created is resolved through this call, never through a search.
+   */
+  async listClientProjects(
+    clientId: string,
+    options: ListProjectsOptions = {},
+  ): Promise<ReadonlyArray<ZeropsProject>> {
+    const query = new URLSearchParams({ limit: String(options.limit ?? 500) });
+    if (options.statuses?.length) query.set("statuses", options.statuses.join(","));
+    const response = await this.#request<{ readonly list?: ReadonlyArray<ZeropsProject> }>(
+      `/client/${clientId}/project?${query.toString()}`,
+    );
+    return response.list ?? [];
+  }
+
+  /** `GET /project/{id}` — also the membership check: 200 member, 403 not. */
+  fetchProject(projectId: string): Promise<ZeropsProject> {
+    return this.#request<ZeropsProject>(`/project/${projectId}`);
+  }
+
+  async listProjectServices(projectId: string): Promise<ReadonlyArray<ZeropsService>> {
+    const response = await this.#request<{ readonly list?: ReadonlyArray<ZeropsService> }>(
+      `/project/${projectId}/service-stack`,
+    );
+    return response.list ?? [];
+  }
+
+  fetchService(serviceId: string): Promise<ZeropsService> {
+    return this.#request<ZeropsService>(`/service-stack/${serviceId}`);
+  }
+
+  /**
+   * `PUT /service-stack/{id}/restart` with the user's own token. On a zcp
+   * container a restart re-runs the platform recipe's install step, which is
+   * what "Enable Zerops Code" means.
+   */
+  async restartService(serviceId: string): Promise<void> {
+    await this.#request(`/service-stack/${serviceId}/restart`, { method: "PUT" });
+  }
+
+  async #setSession(session: ZeropsSession | null): Promise<void> {
+    this.#session = session;
+    await this.#onSessionChange(session);
+  }
+
+  async #refreshSession(): Promise<ZeropsSession> {
+    if (this.#refreshPromise) return this.#refreshPromise;
+    const current = this.#session;
+    if (!current?.refreshToken) {
+      await this.#setSession(null);
+      throw new ZeropsApiError(
+        "Your Zerops session has expired. Sign in again.",
+        "expired-session",
+        401,
+      );
+    }
+
+    this.#refreshPromise = (async () => {
+      const response = await this.#fetch(`${this.#baseUrl}${PUBLIC_API_PREFIX}/auth/refresh`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${current.accessToken}`,
+        },
+        body: JSON.stringify({ refreshTokenId: current.refreshToken }),
+      });
+      if (!response.ok) {
+        const error = await apiErrorFromResponse(response);
+        await this.#setSession(null);
+        throw error;
+      }
+      // `/auth/refresh` answers with the session fields at the top level, not
+      // wrapped in `auth` the way `/auth/login` does.
+      const session = (await response.json()) as ZeropsSession;
+      if (!isUsableZeropsSession(session)) {
+        await this.#setSession(null);
+        throw new ZeropsApiError(
+          "Zerops returned an invalid refreshed session.",
+          "expired-session",
+          401,
+        );
+      }
+      await this.#setSession(session);
+      return session;
+    })().finally(() => {
+      this.#refreshPromise = null;
+    });
+
+    return this.#refreshPromise;
+  }
+
+  async #request<T = unknown>(
+    path: string,
+    init: RequestInit = {},
+    options: RequestOptions = {},
+  ): Promise<T> {
+    const authenticated = options.authenticated ?? true;
+    const retryAfterRefresh = options.retryAfterRefresh ?? true;
+
+    const run = () => {
+      const session = this.#session;
+      return this.#fetch(`${this.#baseUrl}${PUBLIC_API_PREFIX}${path}`, {
+        ...init,
+        headers: {
+          Accept: "application/json",
+          ...(init.body ? { "Content-Type": "application/json" } : {}),
+          ...init.headers,
+          ...(authenticated && session ? { Authorization: `Bearer ${session.accessToken}` } : {}),
+        },
+      });
+    };
+
+    let response: Response;
+    try {
+      response = await run();
+      if (response.status === 401 && retryAfterRefresh) {
+        const session = this.#session;
+        if (session?.refreshToken) {
+          await this.#refreshSession();
+          response = await run();
+        }
+        if (response.status === 401) await this.#setSession(null);
+      }
+    } catch (cause) {
+      if (cause instanceof ZeropsApiError) throw cause;
+      throw new ZeropsApiError(
+        cause instanceof Error
+          ? `Network error contacting Zerops: ${cause.message}`
+          : "Network error contacting Zerops.",
+        "network",
+      );
+    }
+
+    if (!response.ok) {
+      const error = await apiErrorFromResponse(response);
+      if (response.status === 401 && options.unauthorizedMessage) {
+        throw new ZeropsApiError(options.unauthorizedMessage, error.kind, error.status, error.code);
+      }
+      throw error;
+    }
+    if (response.status === 204) return undefined as T;
+    return (await response.json()) as T;
+  }
+}
