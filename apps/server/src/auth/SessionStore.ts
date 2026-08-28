@@ -336,6 +336,18 @@ export class OtherSessionsRevocationError extends Schema.TaggedErrorClass<OtherS
   }
 }
 
+export class SubjectSessionsRevocationError extends Schema.TaggedErrorClass<SubjectSessionsRevocationError>()(
+  "SubjectSessionsRevocationError",
+  {
+    subject: Schema.String,
+    ...sessionCredentialInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to revoke the subject's sessions.";
+  }
+}
+
 export const SessionCredentialInternalError = Schema.Union([
   SessionClaimsEncodingError,
   SessionCredentialIssueError,
@@ -345,6 +357,7 @@ export const SessionCredentialInternalError = Schema.Union([
   ActiveSessionsListError,
   SessionRevocationError,
   OtherSessionsRevocationError,
+  SubjectSessionsRevocationError,
 ]);
 export type SessionCredentialInternalError = typeof SessionCredentialInternalError.Type;
 export const isSessionCredentialInternalError = Schema.is(SessionCredentialInternalError);
@@ -394,6 +407,14 @@ export class SessionStore extends Context.Service<
     ) => Effect.Effect<boolean, SessionCredentialInternalError>;
     readonly revokeAllExcept: (
       sessionId: AuthSessionId,
+    ) => Effect.Effect<number, SessionCredentialInternalError>;
+    /**
+     * Ends every live session a subject holds - the per-user revocation the
+     * Zerops door needs, where one subject is one Zerops user across all their
+     * devices. Returns how many were live; revoking twice counts once.
+     */
+    readonly revokeBySubject: (
+      subject: string,
     ) => Effect.Effect<number, SessionCredentialInternalError>;
     readonly markConnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
     readonly markDisconnected: (sessionId: AuthSessionId) => Effect.Effect<void, never>;
@@ -894,21 +915,11 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const revokeAllExcept: SessionStore["Service"]["revokeAllExcept"] = Effect.fn(
-    "SessionStore.revokeAllExcept",
-  )(function* (sessionId) {
-    const revokedAt = yield* DateTime.now;
-    const revokedSessionIds = yield* authSessions
-      .revokeAllExcept({
-        currentSessionId: sessionId,
-        revokedAt,
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) => new OtherSessionsRevocationError({ currentSessionId: sessionId, cause }),
-        ),
-      );
-    if (revokedSessionIds.length > 0) {
+  const forgetRevoked = (revokedSessionIds: ReadonlyArray<AuthSessionId>) =>
+    Effect.gen(function* () {
+      if (revokedSessionIds.length === 0) {
+        return revokedSessionIds.length;
+      }
       yield* Ref.update(connectedSessionsRef, (current) => {
         const next = new Map(current);
         for (const revokedSessionId of revokedSessionIds) {
@@ -924,8 +935,34 @@ export const make = Effect.gen(function* () {
           discard: true,
         },
       );
-    }
-    return revokedSessionIds.length;
+      return revokedSessionIds.length;
+    });
+
+  const revokeBySubject: SessionStore["Service"]["revokeBySubject"] = Effect.fn(
+    "SessionStore.revokeBySubject",
+  )(function* (subject) {
+    const revokedAt = yield* DateTime.now;
+    const revokedSessionIds = yield* authSessions
+      .revokeBySubject({ subject, revokedAt })
+      .pipe(Effect.mapError((cause) => new SubjectSessionsRevocationError({ subject, cause })));
+    return yield* forgetRevoked(revokedSessionIds);
+  });
+
+  const revokeAllExcept: SessionStore["Service"]["revokeAllExcept"] = Effect.fn(
+    "SessionStore.revokeAllExcept",
+  )(function* (sessionId) {
+    const revokedAt = yield* DateTime.now;
+    const revokedSessionIds = yield* authSessions
+      .revokeAllExcept({
+        currentSessionId: sessionId,
+        revokedAt,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) => new OtherSessionsRevocationError({ currentSessionId: sessionId, cause }),
+        ),
+      );
+    return yield* forgetRevoked(revokedSessionIds);
   });
 
   return SessionStore.of({
@@ -940,6 +977,7 @@ export const make = Effect.gen(function* () {
     },
     revoke,
     revokeAllExcept,
+    revokeBySubject,
     markConnected,
     markDisconnected,
     recordClientConnection,

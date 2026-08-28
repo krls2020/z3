@@ -193,6 +193,17 @@ export class ServerAuthOtherSessionsRevocationError extends Schema.TaggedErrorCl
   }
 }
 
+export class ServerAuthSubjectSessionsRevocationError extends Schema.TaggedErrorClass<ServerAuthSubjectSessionsRevocationError>()(
+  "ServerAuthSubjectSessionsRevocationError",
+  {
+    ...serverAuthInternalErrorContext,
+  },
+) {
+  override get message(): string {
+    return "Failed to revoke the subject's sessions.";
+  }
+}
+
 export class ServerAuthWebSocketTokenIssueError extends Schema.TaggedErrorClass<ServerAuthWebSocketTokenIssueError>()(
   "ServerAuthWebSocketTokenIssueError",
   {
@@ -320,6 +331,7 @@ export const ServerAuthInternalError = Schema.Union([
   ServerAuthSessionsListError,
   ServerAuthSessionRevocationError,
   ServerAuthOtherSessionsRevocationError,
+  ServerAuthSubjectSessionsRevocationError,
   ServerAuthWebSocketTokenIssueError,
   ServerAuthDpopReplayStateRecordError,
   ServerAuthDpopReplayKeyCalculationError,
@@ -468,6 +480,12 @@ export class EnvironmentAuth extends Context.Service<
     readonly revokeOtherSessionsExcept: (
       sessionId: AuthSessionId,
     ) => Effect.Effect<number, ServerAuthInternalError>;
+    /**
+     * Ends every session held by one subject. In a Zerops environment a
+     * subject is one Zerops user, so this is per-user revocation across every
+     * device they signed in from.
+     */
+    readonly revokeBySubject: (subject: string) => Effect.Effect<number, ServerAuthInternalError>;
     readonly listClientSessions: (
       currentSessionId: AuthSessionId,
     ) => Effect.Effect<ReadonlyArray<AuthClientSession>, ServerAuthInternalError>;
@@ -876,6 +894,12 @@ export const make = Effect.gen(function* () {
       Effect.withSpan("EnvironmentAuth.revokeOtherSessionsExcept"),
     );
 
+  const revokeBySubject: EnvironmentAuth["Service"]["revokeBySubject"] = (subject) =>
+    sessions.revokeBySubject(subject).pipe(
+      Effect.mapError((cause) => new ServerAuthSubjectSessionsRevocationError({ cause })),
+      Effect.withSpan("EnvironmentAuth.revokeBySubject"),
+    );
+
   const issuePairingCredential: EnvironmentAuth["Service"]["issuePairingCredential"] = (input) =>
     issuePairingCredentialForSubject({
       scopes: input?.scopes ?? AuthStandardClientScopes,
@@ -987,6 +1011,7 @@ export const make = Effect.gen(function* () {
     listSessions,
     revokeSession,
     revokeOtherSessionsExcept,
+    revokeBySubject,
     listClientSessions,
     revokeClientSession,
     revokeOtherClientSessions,
