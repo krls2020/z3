@@ -56,6 +56,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -5115,6 +5116,79 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       // error: a non-Zerops environment simply has no topology feed.
       assert.equal(snapshot.available, false);
       assert.equal(snapshot.services.length, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("pushes a changed topology to an open websocket subscription", () =>
+    Effect.gen(function* () {
+      // A REAL topology feed over a fake zcp, so the whole path is exercised:
+      // doorbell -> refresh -> publish -> PubSub -> RPC stream -> the wire.
+      // The live symptom was one frame and then silence, and nothing between
+      // the service and the socket had a test.
+      const reads = yield* Ref.make(0);
+      const onDoorbell = yield* Ref.make<
+        ((event: { readonly type: string }) => Effect.Effect<void>) | undefined
+      >(undefined);
+      const attached = yield* Deferred.make<void>();
+      const running = yield* Deferred.make<void>();
+
+      const topology = yield* ZeropsTopology.make({
+        isZeropsEnvironment: true,
+        toolEvents: Stream.empty,
+        cli: {
+          readTopology: Ref.updateAndGet(reads, (n) => n + 1).pipe(
+            Effect.map((attempt) => ({
+              project: { id: "p", name: "z3-eval" },
+              services:
+                attempt === 1
+                  ? []
+                  : [
+                      {
+                        hostname: "s6live1",
+                        serviceId: "svc-1",
+                        type: "valkey:single@7.2",
+                        status: "ACTIVE",
+                        group: "data" as const,
+                        adoptionState: "managed-dep",
+                        isManagedService: true,
+                        transient: false,
+                        mounted: false,
+                      },
+                    ],
+              warnings: [],
+            })),
+          ),
+          watchDoorbell: (handler) =>
+            Ref.set(onDoorbell, handler).pipe(
+              Effect.andThen(Deferred.succeed(attached, undefined)),
+              Effect.andThen(Deferred.await(running)),
+            ),
+        },
+      });
+
+      yield* buildAppUnderTest({ layers: { zeropsTopology: topology } });
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      const frames = yield* Queue.unbounded<number>();
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            yield* Stream.runForEach(client[WS_METHODS.subscribeZeropsTopology]({}), (snapshot) =>
+              Queue.offer(frames, snapshot.services.length),
+            ).pipe(Effect.forkChild);
+
+            // Taking the first frame is the receipt that the subscription is
+            // live on the wire; only then can the doorbell ring meaningfully.
+            assert.equal(yield* Queue.take(frames), 0);
+
+            yield* Deferred.await(attached);
+            const ring = yield* Ref.get(onDoorbell);
+            yield* ring === undefined ? Effect.void : ring({ type: "topology-changed" });
+
+            assert.equal(yield* Queue.take(frames), 1);
+          }),
+        ),
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
