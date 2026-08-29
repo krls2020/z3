@@ -120,6 +120,7 @@ import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as ZeropsAgentAuth from "./zerops/ZeropsAgentAuth.ts";
 import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
 import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -559,6 +560,7 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const zeropsTopology = yield* ZeropsTopology.ZeropsTopology;
       const zeropsLifecycle = yield* ZeropsLifecycle.ZeropsLifecycle;
+      const zeropsAgentAuth = yield* ZeropsAgentAuth.ZeropsAgentAuth;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -2531,6 +2533,16 @@ const makeWsRpcLayer = (
             WS_METHODS.subscribeZeropsLifecycle,
             Stream.unwrap(
               Effect.map(zeropsLifecycle.subscribe(input.threadId), ({ latest, changes }) =>
+                Stream.concat(Stream.make(latest), changes),
+              ),
+            ),
+            { "rpc.aggregate": "zerops" },
+          ),
+        [WS_METHODS.subscribeZeropsAgentAuth]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeZeropsAgentAuth,
+            Stream.unwrap(
+              Effect.map(zeropsAgentAuth.subscribe, ({ latest, changes }) =>
                 Stream.concat(Stream.make(latest), changes),
               ),
             ),
