@@ -1,7 +1,7 @@
 zerops:
   - setup: relay
     build:
-      base: nodejs@22
+      base: ubuntu/nodejs@22
       buildCommands:
         # buildFromGit clones the whole monorepo; pnpm's workspace resolves
         # infra/relay's @t3tools/* siblings from here.
@@ -21,7 +21,7 @@ zerops:
         - tsconfig.base.json
         - packages
     run:
-      base: nodejs@22
+      base: ubuntu/nodejs@22
       ports:
         - port: 8080
           httpSupport: true
@@ -29,14 +29,21 @@ zerops:
         - cd infra/relay && pnpm run migrate
       start: cd infra/relay && pnpm run start
       envVariables:
-        PORT: 8080
+        PORT: "8080"
         HOST: 0.0.0.0
-        # Filled in from the paired PostgreSQL service (see
-        # zerops-import.yml's envVariables cross-reference) once imported;
-        # a manual deploy must set this to the target Postgres service's
-        # generated connection string.
+        # `db_connectionString` is a cross-service reference to the paired
+        # PostgreSQL service's generated connection string (see
+        # zerops-import.yml — the `db` service must exist in the same
+        # project under that hostname).
         DATABASE_URL: ${db_connectionString}
-        RELAY_ISSUER: ${zeropsSubdomain}
+        # The platform injects the service's own public origin as the
+        # `zeropsSubdomain` runtime env var once enableSubdomainAccess is on
+        # — but only after the first deploy assigns it, so it cannot be
+        # cross-referenced here at import time. Set this explicitly to the
+        # assigned https://<subdomain> origin after the first deploy (or
+        # change server.ts to fall back to `process.env.zeropsSubdomain`
+        # when RELAY_ISSUER is unset).
+        RELAY_ISSUER: https://relay-<subdomain>.<region>.zerops.app
         # Secrets: set these on the service before the first deploy. Never
         # commit real values.
         CLOUD_MINT_PRIVATE_KEY: ${CLOUD_MINT_PRIVATE_KEY}
