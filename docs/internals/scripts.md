@@ -29,7 +29,6 @@ authenticated.
   without Bun present it selects `NodePtyAdapter` and `NodeHttpServer`.
 - `vp run dev:web`: Starts just the Vite dev server for the web app.
 - `vp run dev:desktop`: Starts the Electron shell against the dev server.
-- `vp run dev:marketing`: Starts the Astro marketing site.
 - Pass dev-runner flags directly after the root task name, for example:
   `vp run dev --home-dir /tmp/t3code-dev`
 
@@ -47,7 +46,7 @@ authenticated.
 ## Build, check, test
 
 - `vp run build`: Fans out over `apps/*`, `packages/*`, `oxlint-plugin-t3code`, and `scripts`.
-  Workspaces that define a build task run one: desktop, marketing, server (which depends on web), and
+  Workspaces that define a build task run one: desktop, server (which depends on web), and
   web. Shared packages are consumed and bundled transitively rather than built separately.
 - `vp run build:desktop`: Builds the desktop pipeline (desktop plus server).
 - `vp run start`: Runs the production server (serves the built web app as static files).
