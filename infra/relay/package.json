@@ -10,7 +10,6 @@
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
-    "@clerk/backend": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/sql-pg": "catalog:",
     "@noble/curves": "catalog:",

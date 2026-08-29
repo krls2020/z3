@@ -193,6 +193,10 @@ export const RelayEnvironmentLinkProofPayload = Schema.Struct({
   endpoint: RelayManagedEndpoint,
   origin: RelayManagedEndpointOrigin,
   scopes: Schema.Array(RelayEnvironmentLinkScope),
+  /** The Zerops project this environment claims to run in — verified against the caller's own Zerops token, never trusted bare. */
+  zeropsProjectId: TrimmedNonEmptyString,
+  /** The environment's public origin (its own Zerops-provisioned subdomain) — verified as belonging to a service of `zeropsProjectId`. */
+  endpointOrigin: TrimmedNonEmptyString,
 });
 export type RelayEnvironmentLinkProofPayload = typeof RelayEnvironmentLinkProofPayload.Type;
 
@@ -247,6 +251,7 @@ export const RelayEnvironmentLinkProofInvalidReason = Schema.Literals([
   "replayed_nonce",
   "challenge_invalid",
   "endpoint_not_secure",
+  "zerops_project_not_bound",
 ]);
 export type RelayEnvironmentLinkProofInvalidReason =
   typeof RelayEnvironmentLinkProofInvalidReason.Type;
@@ -337,6 +342,24 @@ export class RelayEnvironmentLinkFailedError extends Schema.TaggedErrorClass<Rel
   }
 }
 
+export const RelayEnvironmentLinkUnavailableReason = Schema.Literals(["zerops_api_unavailable"]);
+export type RelayEnvironmentLinkUnavailableReason =
+  typeof RelayEnvironmentLinkUnavailableReason.Type;
+
+export class RelayEnvironmentLinkUnavailableError extends Schema.TaggedErrorClass<RelayEnvironmentLinkUnavailableError>()(
+  "RelayEnvironmentLinkUnavailableError",
+  {
+    code: Schema.Literal("environment_link_unavailable"),
+    reason: RelayEnvironmentLinkUnavailableReason,
+    traceId: TrimmedNonEmptyString,
+  },
+  { httpApiStatus: 503 },
+) {
+  override get message(): string {
+    return `Relay environment link is unavailable: ${this.reason}`;
+  }
+}
+
 export class RelayAgentActivityPublishProofExpiredError extends Schema.TaggedErrorClass<RelayAgentActivityPublishProofExpiredError>()(
   "RelayAgentActivityPublishProofExpiredError",
   {
@@ -383,6 +406,7 @@ export const RelayProtectedError = Schema.Union([
   RelayEnvironmentLinkProofExpiredError,
   RelayEnvironmentLinkProofInvalidError,
   RelayEnvironmentLinkFailedError,
+  RelayEnvironmentLinkUnavailableError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
   RelayInternalError,
@@ -396,6 +420,7 @@ const RelayEnvironmentLinkErrors = [
   RelayEnvironmentLinkProofExpiredError,
   RelayEnvironmentLinkProofInvalidError,
   RelayEnvironmentLinkFailedError,
+  RelayEnvironmentLinkUnavailableError,
   RelayInternalError,
 ] as const;
 
@@ -427,7 +452,7 @@ export class RelayEnvironmentPrincipal extends Context.Service<
 const RelayClientBearerAuthorization = HttpApiSecurity.http({ scheme: "bearer" }).pipe(
   HttpApiSecurity.annotate(
     OpenApi.Description,
-    "Clerk session or OAuth bearer token for the signed-in T3 Connect user.",
+    "Zerops access token for the signed-in T3 Connect user.",
   ),
 );
 
@@ -491,7 +516,7 @@ export const RelayWebClientId = "t3-web" as const;
 export const RelayDpopAccessTokenRequest = Schema.Struct({
   grant_type: Schema.Literal(RelayDpopTokenExchangeGrantType),
   subject_token: TrimmedNonEmptyString.annotate({
-    description: "Clerk bearer token for the signed-in cloud user.",
+    description: "Zerops access token for the signed-in cloud user.",
   }),
   subject_token_type: Schema.Literal(RelayJwtSubjectTokenType),
   requested_token_type: Schema.Literal(RelayAccessTokenType),
@@ -775,10 +800,10 @@ export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
     error: RelayAuthAndInternalErrors,
   },
 )
-  .annotate(OpenApi.Summary, "Exchange a Clerk token for a DPoP access token")
+  .annotate(OpenApi.Summary, "Exchange a Zerops access token for a DPoP access token")
   .annotate(
     OpenApi.Description,
-    "Bootstrap endpoint. Send the DPoP proof JWT in the dpop header and the Clerk token in subject_token. The returned access token is bound to the proof key.",
+    "Bootstrap endpoint. Send the DPoP proof JWT in the dpop header and the Zerops access token in subject_token. The returned access token is bound to the proof key.",
   );
 
 export const RelayTokenGroup = HttpApiGroup.make("token")

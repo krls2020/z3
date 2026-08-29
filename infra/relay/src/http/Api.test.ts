@@ -1,6 +1,4 @@
-import { createClerkClient, verifyToken } from "@clerk/backend";
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -14,25 +12,25 @@ import * as Tracer from "effect/Tracer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { RelayEnvironmentAuth } from "@t3tools/contracts/relay";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import {
+  RelayClientAuth,
+  RelayClientPrincipal,
+  RelayEnvironmentAuth,
+} from "@t3tools/contracts/relay";
 
 import {
   RELAY_REQUEST_DEADLINE_MS,
+  relayClientAuthLayer,
   relayCors,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
   traceRelayHttpRequestWith,
-  verifyRelayClientBearerToken,
   withoutCapturedParentSpan,
 } from "./Api.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
-
-vi.mock("@clerk/backend", () => ({
-  createClerkClient: vi.fn(),
-  verifyToken: vi.fn(),
-}));
 
 const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
   relayIssuer: "https://relay.example.test",
@@ -43,66 +41,85 @@ const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
     bundleId: "com.example.t3",
     environment: "sandbox",
   },
-  clerkSecretKey: Redacted.make("clerk-secret-key"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  zeropsApiHost: "relay-test.zerops.invalid",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
   cloudMintPublicKey: "cloud-mint-public-key",
 };
 
-describe("relay client authentication", () => {
-  it.effect("preserves the existing Clerk session JWT path", () =>
-    Effect.gen(function* () {
-      vi.mocked(verifyToken).mockResolvedValue({
-        sub: "user_session",
-        aud: relaySettings.clerkJwtAudience,
-      } as never);
-
-      expect(yield* verifyRelayClientBearerToken(relaySettings, "session-token")).toEqual({
-        sub: "user_session",
-        mode: "clerk_session_bearer",
-      });
-      expect(verifyToken).toHaveBeenCalledWith("session-token", {
-        secretKey: "clerk-secret-key",
-        audience: relaySettings.clerkJwtAudience,
-      });
-      expect(createClerkClient).not.toHaveBeenCalled();
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
-      ),
+function fakeZeropsHttpClientLayer(route: (url: string) => Response) {
+  return Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, route(request.url))),
     ),
   );
+}
 
-  it.effect("falls back to Clerk OAuth token verification for the headless CLI", () =>
-    Effect.gen(function* () {
-      vi.mocked(verifyToken).mockRejectedValue(new Error("not a session JWT"));
-      vi.mocked(createClerkClient).mockReturnValue({
-        authenticateRequest: vi.fn().mockResolvedValue({
-          isAuthenticated: true,
-          toAuth: () => ({ userId: "user_oauth" }),
+const clientAuthRequest = () =>
+  HttpServerRequest.fromWeb(new Request("https://relay.test/v1/client/environment-links"));
+
+describe("relay client authentication", () => {
+  it.effect("resolves the caller's Zerops user id from a valid bearer token", () => {
+    let seenPrincipal: { readonly userId: string; readonly token: string } | null = null;
+    return Effect.gen(function* () {
+      const auth = yield* RelayClientAuth;
+      yield* auth.clientBearer(
+        Effect.gen(function* () {
+          const { userId, token } = yield* RelayClientPrincipal;
+          seenPrincipal = { userId, token };
+          return HttpServerResponse.empty();
         }),
-      } as never);
+        { credential: Redacted.make("zerops-token"), endpoint: {} as never, group: {} as never },
+      );
 
-      expect(yield* verifyRelayClientBearerToken(relaySettings, "oauth-token")).toEqual({
-        sub: "user_oauth",
-        mode: "clerk_oauth_bearer",
-      });
-      expect(createClerkClient).toHaveBeenCalledWith({
-        secretKey: "clerk-secret-key",
-        publishableKey: "pk_test_test",
-      });
+      expect(seenPrincipal).toEqual({ userId: "user_zerops", token: "zerops-token" });
     }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
+      Effect.provideService(HttpServerRequest.HttpServerRequest, clientAuthRequest()),
+      Effect.provideService(HttpServerRequest.ParsedSearchParams, {}),
+      Effect.provideService(HttpRouter.RouteContext, { params: {}, route: {} as never }),
+      Effect.provide(
+        relayClientAuthLayer.pipe(
+          Layer.provide(RelayConfiguration.layer(relaySettings)),
+          Layer.provide(
+            fakeZeropsHttpClientLayer((url) =>
+              url.endsWith("/user/info")
+                ? new Response(JSON.stringify({ id: "user_zerops" }), {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                  })
+                : new Response(null, { status: 500 }),
+            ),
+          ),
+        ),
       ),
+      Effect.scoped,
+    );
+  });
+
+  it.effect("rejects an invalid bearer token", () =>
+    Effect.gen(function* () {
+      const auth = yield* RelayClientAuth;
+      const error = yield* Effect.flip(
+        auth.clientBearer(Effect.succeed(HttpServerResponse.empty()), {
+          credential: Redacted.make("bad-token"),
+          endpoint: {} as never,
+          group: {} as never,
+        }),
+      );
+
+      expect(error).toMatchObject({ _tag: "RelayAuthInvalidError", reason: "invalid_bearer" });
+    }).pipe(
+      Effect.provideService(HttpServerRequest.HttpServerRequest, clientAuthRequest()),
+      Effect.provideService(HttpServerRequest.ParsedSearchParams, {}),
+      Effect.provideService(HttpRouter.RouteContext, { params: {}, route: {} as never }),
+      Effect.provide(
+        relayClientAuthLayer.pipe(
+          Layer.provide(RelayConfiguration.layer(relaySettings)),
+          Layer.provide(fakeZeropsHttpClientLayer(() => new Response(null, { status: 401 }))),
+        ),
+      ),
+      Effect.scoped,
     ),
   );
 });

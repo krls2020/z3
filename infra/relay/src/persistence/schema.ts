@@ -70,6 +70,10 @@ export const relayEnvironmentLinks = pgTable(
     endpointHttpBaseUrl: text("endpoint_http_base_url").notNull(),
     endpointWsBaseUrl: text("endpoint_ws_base_url").notNull(),
     endpointProviderKind: varchar("endpoint_provider_kind", { length: 32 }).notNull(),
+    // The Zerops project this environment was proven to belong to at link
+    // time (ZeropsProjectBinding.verify) — the environment's own claim,
+    // verified against the linking user's Zerops token.
+    zeropsProjectId: varchar("zerops_project_id", { length: 191 }).notNull().default(""),
     notificationsEnabled: boolean("notifications_enabled").notNull().default(true),
     liveActivitiesEnabled: boolean("live_activities_enabled").notNull().default(true),
     createdByDeviceId: varchar("created_by_device_id", { length: 191 }),

@@ -107,9 +107,7 @@ const configLayer = Layer.unwrap(
     const apnsDeliveryJobSigningSecret = yield* Config.redacted("APNS_DELIVERY_JOB_SIGNING_SECRET");
     const cloudMintPrivateKey = yield* Config.redacted("CLOUD_MINT_PRIVATE_KEY");
     const cloudMintPublicKey = yield* Config.string("CLOUD_MINT_PUBLIC_KEY");
-    const clerkSecretKey = yield* Config.redacted("CLERK_SECRET_KEY");
-    const clerkPublishableKey = yield* Config.string("CLERK_PUBLISHABLE_KEY");
-    const clerkJwtAudience = yield* Config.string("CLERK_JWT_AUDIENCE");
+    const zeropsApiHost = yield* Config.string("ZEROPS_API_HOST").pipe(Config.withDefault(""));
 
     return RelayConfiguration.layer({
       relayIssuer,
@@ -121,9 +119,7 @@ const configLayer = Layer.unwrap(
         privateKey: apnsPrivateKey,
       },
       apnsDeliveryJobSigningSecret,
-      clerkSecretKey,
-      clerkPublishableKey,
-      clerkJwtAudience,
+      zeropsApiHost,
       cloudMintPrivateKey,
       cloudMintPublicKey,
     });
@@ -199,7 +195,7 @@ const serveLayer = Layer.merge(
   HttpRouter.serve(routerLayer, {
     middleware: (effect) =>
       traceRelayHttpRequest(effect).pipe(Effect.provide(httpHeaderRedactionLayer)),
-  }).pipe(Layer.provideMerge(HttpServerLive)),
+  }).pipe(Layer.provideMerge(HttpServerLive), Layer.provideMerge(FetchHttpClient.layer)),
   backgroundWorkLayer,
 );
 
