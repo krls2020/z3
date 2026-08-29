@@ -348,7 +348,7 @@ export const WS_METHODS = {
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
   subscribeZeropsTopology: "subscribeZeropsTopology",
   subscribeZeropsLifecycle: "subscribeZeropsLifecycle",
-  subscribeZeropsAgentAuth: "zerops.agentAuth.subscribe",
+  subscribeZeropsAgentAuth: "subscribeZeropsAgentAuth",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
