@@ -32,6 +32,7 @@ import {
   WS_METHODS,
   WsRpcGroup,
   EditorId,
+  ZeropsAgentLoginError,
 } from "@t3tools/contracts";
 import {
   computeDpopAccessTokenHash,
@@ -125,6 +126,7 @@ import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ZeropsAgentAuth from "./zerops/ZeropsAgentAuth.ts";
+import * as ZeropsAgentLoginModule from "./zerops/ZeropsAgentLogin.ts";
 import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
 import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -410,6 +412,12 @@ const unavailableZeropsAgentAuth = {
   agents: [],
 } as const;
 
+/** What the agent login feed reports outside a Zerops environment — no session for either agent. */
+const unavailableZeropsAgentLogin = {
+  "claude-code": undefined,
+  codex: undefined,
+} as const;
+
 const buildAppUnderTest = (options?: {
   config?: Partial<ServerConfig.ServerConfig["Service"]>;
   layers?: {
@@ -454,6 +462,7 @@ const buildAppUnderTest = (options?: {
     zeropsTopology?: Partial<ZeropsTopology.ZeropsTopology["Service"]>;
     zeropsLifecycle?: Partial<ZeropsLifecycle.ZeropsLifecycle["Service"]>;
     zeropsAgentAuth?: Partial<ZeropsAgentAuth.ZeropsAgentAuth["Service"]>;
+    zeropsAgentLogin?: Partial<ZeropsAgentLoginModule.ZeropsAgentLogin["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -916,18 +925,49 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         // A test machine is not a Zerops environment, which is exactly the
-        // shape the real feed reports there: unavailable, no errors. Mocked
+        // shape the real feeds report there: unavailable, no errors. Mocked
         // rather than built so the suite never touches a real credential
-        // directory or the zembed env store.
-        Layer.mock(ZeropsAgentAuth.ZeropsAgentAuth)({
-          latest: Effect.succeed(unavailableZeropsAgentAuth),
-          changes: Stream.empty,
-          subscribe: Effect.succeed({
-            latest: unavailableZeropsAgentAuth,
+        // directory or the zembed env store. `ZeropsAgentLogin` (S7
+        // follow-up F8) mirrors `ZeropsAgentAuth`'s own shape — no active
+        // session for either agent, `start`/`cancel` failing the same way
+        // the real feed would outside a Zerops environment — merged into
+        // the SAME `Layer.provide` call to keep this pipe chain's own
+        // argument count under the typed `.pipe()` overload limit.
+        Layer.mergeAll(
+          Layer.mock(ZeropsAgentAuth.ZeropsAgentAuth)({
+            latest: Effect.succeed(unavailableZeropsAgentAuth),
             changes: Stream.empty,
+            subscribe: Effect.succeed({
+              latest: unavailableZeropsAgentAuth,
+              changes: Stream.empty,
+            }),
+            recheckNow: () => Effect.void,
+            ...options?.layers?.zeropsAgentAuth,
           }),
-          ...options?.layers?.zeropsAgentAuth,
-        }),
+          Layer.mock(ZeropsAgentLoginModule.ZeropsAgentLogin)({
+            latest: Effect.succeed(unavailableZeropsAgentLogin),
+            changes: Stream.empty,
+            subscribe: Effect.succeed({
+              latest: unavailableZeropsAgentLogin,
+              changes: Stream.empty,
+            }),
+            start: () =>
+              Effect.fail(
+                new ZeropsAgentLoginError({
+                  reason: "unavailable",
+                  detail: "This environment does not offer a server-driven login.",
+                }),
+              ),
+            cancel: () =>
+              Effect.fail(
+                new ZeropsAgentLoginError({
+                  reason: "unavailable",
+                  detail: "This environment does not offer a server-driven login.",
+                }),
+              ),
+            ...options?.layers?.zeropsAgentLogin,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({

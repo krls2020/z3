@@ -194,6 +194,10 @@ import {
 } from "./resourceTelemetry.ts";
 import {
   ZeropsAgentAuthSnapshot,
+  ZeropsAgentLoginCancelInput,
+  ZeropsAgentLoginError,
+  ZeropsAgentLoginStartInput,
+  ZeropsAgentLoginStartResult,
   ZeropsLifecycle,
   ZeropsLifecycleGetInput,
   ZeropsTopologySnapshot,
@@ -334,6 +338,8 @@ export const WS_METHODS = {
   zeropsTopologyGet: "zerops.topology.get",
   zeropsTopologyRefresh: "zerops.topology.refresh",
   zeropsLifecycleGet: "zerops.lifecycle.get",
+  zeropsAgentLoginStart: "zerops.agentLogin.start",
+  zeropsAgentLoginCancel: "zerops.agentLogin.cancel",
 
   // Streaming subscriptions
   subscribeVcsStatus: "subscribeVcsStatus",
@@ -1080,6 +1086,24 @@ export const WsSubscribeZeropsAgentAuthRpc = Rpc.make(WS_METHODS.subscribeZerops
   stream: true,
 });
 
+/**
+ * Starts (or, for an agent that already has one running, re-attaches to) a
+ * server-driven login session for `agentId` in `threadId`'s dedicated
+ * terminal — S7 follow-up F8. Non-streaming: the resulting `login` state
+ * rides the existing `subscribeZeropsAgentAuth` feed, not a reply here.
+ */
+export const WsZeropsAgentLoginStartRpc = Rpc.make(WS_METHODS.zeropsAgentLoginStart, {
+  payload: ZeropsAgentLoginStartInput,
+  success: ZeropsAgentLoginStartResult,
+  error: Schema.Union([TerminalError, ZeropsAgentLoginError, EnvironmentAuthorizationError]),
+});
+
+/** Cancels `agentId`'s active login session, if any: sends Ctrl-C and closes its terminal. */
+export const WsZeropsAgentLoginCancelRpc = Rpc.make(WS_METHODS.zeropsAgentLoginCancel, {
+  payload: ZeropsAgentLoginCancelInput,
+  error: Schema.Union([TerminalError, ZeropsAgentLoginError, EnvironmentAuthorizationError]),
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsExecRunRpc,
   WsServerProbeRpc,
@@ -1182,6 +1206,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsZeropsLifecycleGetRpc,
   WsSubscribeZeropsLifecycleRpc,
   WsSubscribeZeropsAgentAuthRpc,
+  WsZeropsAgentLoginStartRpc,
+  WsZeropsAgentLoginCancelRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
