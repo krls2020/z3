@@ -192,8 +192,7 @@ reconnects to the matching server. When the release adds database migrations, ve
 remote update applies them and reconnects. A failed trial must restore the database snapshot and
 restart the previous server. If the installed launcher does not support the target protocol,
 verify that the update stops before restart and run `npx t3@<version> service update` once on the
-server machine. Also test the manual or desktop-managed guidance when those environments are
-available.
+server machine. Also test the manual pairing guidance when a headless environment is available.
 
 ## Desktop auto-update notes
 
@@ -216,43 +215,23 @@ available.
   - `electron-updater` reads `latest-mac.yml` on stable and `nightly-mac.yml` on nightly, for both Intel and Apple Silicon.
   - The workflow merges the per-arch mac manifests into one channel-specific mac manifest before publishing the GitHub Release.
 
-### Windows payload topology and update validation
+### Packaged web bundle topology
 
-Windows packages the bundled server and only its runtime-external/native
-dependency closure in `resources/server.asar`. Native modules and helper
-executables declared as unpacked by that archive must be present at the matching
-paths below `resources/server.asar.unpacked`. The Windows-native backend reads
-the archive in place through Electron. Packaged Windows builds also ship a
-Linux-only `resources/wsl-runtime.tar.gz` plus its SHA-256 sidecar. WSL verifies
-and extracts that archive into `~/.t3/wsl-runtime/sha256-<archive-digest>` inside
-the selected distro, then reuses it for later launches of the same update. The
-Windows-side `wsl-server-tree/<version>` extraction remains a fallback and is
-removed after the distro-local runtime passes preflight.
+The desktop app has no embedded server. `scripts/build-desktop-artifact.ts`'s
+`stageHostedWebBundle` builds `apps/web` in hosted-static mode
+(`VITE_HOSTED_APP_CHANNEL` set to the desktop's own update channel,
+`VITE_HTTP_URL`/`VITE_WS_URL` both scrubbed) and stages the resulting dist as an
+unconditional `extraResources` entry, landing at `resources/web` in every
+packaged build (mac, Windows, Linux alike — there is no more Windows-only
+sidecar path). At runtime `DesktopEnvironment.resolveResourcePathCandidates`
+finds `resources/web/index.html`, and `ElectronProtocol` serves the rest of
+that directory from disk with an `index.html` SPA fallback.
 
-The artifact builder rejects a Windows package when any of these invariants
-break:
+The artifact builder rejects a package when the staged web bundle is missing
+(`MissingDesktopBuildInputError` with artifact `"web-dist"`) or fails asset
+validation (`validateBundledClientAssets`).
 
-- `resources/server.asar` is absent or does not contain the server entry.
-- Any file marked unpacked in the ASAR header is absent from
-  `resources/server.asar.unpacked`.
-- On same-architecture Windows builds, the packaged primary cannot load the fff
-  native library from inside `server.asar` through its `.unpacked` sibling.
-- The isolated, extracted sidecar cannot load the server entry with plain Node.
-- A Windows build with a WSL node-pty prebuild omits the WSL archive or SHA-256
-  sidecar, the sidecar digest does not match the emitted archive, or required
-  Linux runtime members are absent.
-- The emitted WSL archive contains Windows/Darwin node-pty payloads, ConPTY,
-  pnpm install metadata, or Windows-only FFF, ffi-rs, or msgpackr bindings.
-- The external Windows resource monitor is absent.
-- The unpacked Windows application contains more than 80 files.
-
-Cross-architecture Windows builds retain every structural and extracted-sidecar
-check, but skip executing the target Electron binary. A same-architecture build
-for each release target must exercise the primary native-load probe.
-
-NSIS differential packaging remains enabled. A sidecar layout transition can
-produce a larger one-time download; subsequent small releases retain their
-blockmaps, with a 60 MB maximum for a representative sidecar-to-sidecar update.
+NSIS differential packaging remains enabled.
 
 ## 0) npm OIDC trusted publishing setup (CLI)
 

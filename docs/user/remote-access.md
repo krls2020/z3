@@ -12,7 +12,7 @@ npx t3 pair
 
 `t3 pair` finds the running server (the shared `~/.t3` install, or the current worktree's dev server when run inside one), issues a one-time pairing token, and prints the pairing URL as a QR code you can scan from your phone.
 
-If the server is only bound to loopback, the printed URL is not reachable from another device. Restart it with a reachable `--host` (see Option 2 below), or expose the desktop app's backend through **Network access** (see Option 1 below). Use `--ttl` to change the token lifetime, and `--base-dir` to target a specific data directory.
+If the server is only bound to loopback, the printed URL is not reachable from another device. Restart it with a reachable `--host` (see below). Use `--ttl` to change the token lifetime, and `--base-dir` to target a specific data directory.
 
 If no server is running, `t3 pair` says so and points you at `npx t3 serve` or `npx t3 connect`.
 
@@ -28,35 +28,11 @@ That gives you:
 
 ## Enabling Network Access
 
-There are three ways to reach your server from another device: expose the desktop app's backend,
-run a headless server from the CLI, or have the desktop app launch T3 Code over SSH.
+The desktop app is a pure hosted client — it has no local backend of its own to expose, and it
+does not launch or manage a remote server over SSH. To reach a T3 Code server from another
+device, run a headless server from the CLI.
 
-### Option 1: Desktop App
-
-If you are already running the desktop app and want to make it reachable from other devices:
-
-1. Open **Settings** → **Connections**.
-2. Under **This environment**, toggle **Network access** on. This will restart the app and run the backend on all network interfaces.
-3. The settings panel will show the default reachable endpoint, with a `+N` control when more endpoints are available. Expand it to inspect alternatives such as loopback, LAN, private-network, or HTTPS endpoints.
-4. Use **Create Link** to generate a pairing link you can share with another device.
-
-The default endpoint controls the QR code and primary copy action for pairing links. You can change it from the expanded endpoint list. The preference is stored by endpoint type, so choosing the local LAN endpoint survives normal IP address changes when you move between networks.
-
-When no user default is saved, the app uses the built-in LAN endpoint for pairing links when
-available. You can set another endpoint as the default from the expanded endpoint list.
-
-- HTTPS/WSS-compatible endpoints work from `https://app.t3.codes`, but are not made the default
-  automatically.
-- Non-loopback HTTP endpoints are useful for direct LAN pairing.
-- Loopback-only endpoints are not useful for another device unless that device is the same machine.
-
-If the copied link points directly at `http://192.168.x.y:3773`, open it from a client that can reach that LAN address. If it points at `https://app.t3.codes/pair?...`, the hosted web app will save the environment and connect directly to the backend URL in the link.
-
-In the mobile app's **Add Environment** form, a numeric IP address without a scheme uses HTTP. Include `https://` explicitly when the backend is served over HTTPS.
-
-For `https://app.t3.codes`, prefer an HTTPS endpoint. A plain `http://192.168.x.y:3773` endpoint can still work from a desktop client or another browser page served over HTTP, but it will not work from the hosted HTTPS app because of browser mixed-content rules.
-
-### Option 2: Headless Server (CLI)
+### Headless Server (CLI)
 
 Use this when you want to run the server without a GUI, for example on a remote machine over SSH.
 
@@ -86,51 +62,6 @@ For hosted web pairing, the backend needs to be reachable over HTTPS — put it 
 
 Once paired, add projects normally: open the Command Palette and choose **Add Project**, then pick
 the environment the project lives on. Every saved environment is offered, not only the local one.
-
-### Option 3: Desktop-Managed SSH Launch
-
-Use this when you want the desktop app to start or reuse T3 Code on another machine over SSH.
-
-1. Open **Settings** → **Connections**.
-2. Under **Remote Environments**, choose **Add environment**.
-3. Select the SSH launch flow.
-4. Enter the SSH target, such as `user@example.com`.
-5. Confirm the launch. The desktop app probes the host, starts or reuses a remote T3 server, opens a local port forward, and saves the environment.
-
-After setup, the renderer connects to a local forwarded HTTP/WebSocket endpoint. The remote host still owns the actual T3 server, projects, files, git state, terminals, and provider sessions.
-
-SSH launch is a desktop feature because it needs local process and SSH access. Once the environment is paired and saved, it uses the same environment list and connection model as direct LAN, HTTPS, or future tunnel-backed environments.
-
-#### SSH Launch Troubleshooting
-
-The desktop SSH launcher connects with a non-interactive `sh` session, writes a small launcher script under `~/.t3/ssh-launch/<host-key>/`, starts or reuses a remote T3 server, and forwards the remote loopback port back to your desktop.
-
-The remote host must have a compatible Node.js runtime. T3 Code uses the server package's `engines.node` requirement:
-
-```text
-^22.16 || ^23.11 || >=24.10
-```
-
-During SSH launch, T3 Code first checks whether `node` is on `PATH`. If it is missing, the launcher
-looks in the usual install directories and tries to activate a version manager if it finds one
-(Volta, asdf, mise, fnm, nodenv, nvm). That covers most setups, but a version manager that only
-initializes from an interactive shell profile will not be picked up.
-
-If launch fails with `node: command not found`, a port-scan failure, or a message that the remote Node version does not satisfy the required range, SSH into the host and check the same non-interactive shell path T3 Code uses:
-
-```bash
-ssh user@example.com 'sh -lc "command -v node && node --version"'
-```
-
-If that does not print a compatible Node version, configure your version manager for non-interactive shells or install a compatible Node binary in one of the searched locations. For example, with nvm you may need a default alias:
-
-```bash
-nvm alias default 24
-```
-
-With mise, asdf, fnm, or nodenv, make sure the tool's shim directory is installed and resolves to a Node version satisfying the range above without an interactive shell.
-
-If reconnecting after an app update fails, retry the SSH launch once. The launcher now compares its generated runner script, stops stale launcher-managed remote servers, clears the SSH launch PID/port state, and starts a fresh remote server. You should not normally need to delete `~/.t3/ssh-launch` or kill `t3` processes manually.
 
 ## Updating a Remote Server
 
