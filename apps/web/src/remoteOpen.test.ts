@@ -19,10 +19,7 @@ const primaryTarget = (httpBaseUrl: string) =>
     wsBaseUrl: httpBaseUrl.replace("http", "ws"),
   });
 
-const TAILSCALE_TARGETS = [
-  { kind: "tailscale", host: "sol.tail1234.ts.net" },
-  { kind: "mdns", host: "sol.local" },
-] as const;
+const REMOTE_OPEN_TARGETS = [{ kind: "mdns", host: "sol.local" }] as const;
 
 describe("resolveRemoteOpenState", () => {
   it("keeps exec behavior for a loopback primary target", () => {
@@ -31,7 +28,7 @@ describe("resolveRemoteOpenState", () => {
         target: primaryTarget("http://127.0.0.1:8000"),
         sshAlias: null,
         isDesktopRenderer: false,
-        remoteOpenTargets: TAILSCALE_TARGETS,
+        remoteOpenTargets: REMOTE_OPEN_TARGETS,
       }),
     ).toEqual({ mode: "local-exec" });
   });
@@ -39,14 +36,14 @@ describe("resolveRemoteOpenState", () => {
   it("uses deep links for a primary target reached over the network", () => {
     expect(
       resolveRemoteOpenState({
-        target: primaryTarget("https://sol.tail1234.ts.net"),
+        target: primaryTarget("https://192.168.1.10"),
         sshAlias: null,
         isDesktopRenderer: false,
-        remoteOpenTargets: TAILSCALE_TARGETS,
+        remoteOpenTargets: REMOTE_OPEN_TARGETS,
       }),
     ).toEqual({
       mode: "remote-links",
-      host: { kind: "tailscale", host: "sol.tail1234.ts.net" },
+      host: { kind: "mdns", host: "sol.local" },
     });
   });
 
@@ -58,7 +55,7 @@ describe("resolveRemoteOpenState", () => {
         target: primaryTarget("http://172.29.112.1:14369"),
         sshAlias: null,
         isDesktopRenderer: true,
-        remoteOpenTargets: TAILSCALE_TARGETS,
+        remoteOpenTargets: REMOTE_OPEN_TARGETS,
       }),
     ).toEqual({ mode: "local-exec" });
   });
@@ -73,7 +70,7 @@ describe("resolveRemoteOpenState", () => {
         }),
         sshAlias: null,
         isDesktopRenderer: false,
-        remoteOpenTargets: TAILSCALE_TARGETS,
+        remoteOpenTargets: REMOTE_OPEN_TARGETS,
       }),
     ).toEqual({ mode: "local-exec" });
   });
@@ -88,7 +85,7 @@ describe("resolveRemoteOpenState", () => {
         }),
         sshAlias: "sol",
         isDesktopRenderer: true,
-        remoteOpenTargets: TAILSCALE_TARGETS,
+        remoteOpenTargets: REMOTE_OPEN_TARGETS,
       }),
     ).toEqual({ mode: "remote-links", host: { kind: "ssh-alias", host: "sol" } });
   });
@@ -123,10 +120,10 @@ describe("buildRemoteOpenUrl", () => {
     expect(
       buildRemoteOpenUrl({
         editor: "vscode",
-        host: "sol.tail1234.ts.net",
+        host: "sol.local",
         absolutePath: "/home/theo/code/my repo",
       }),
-    ).toBe("vscode://vscode-remote/ssh-remote+sol.tail1234.ts.net/home/theo/code/my%20repo");
+    ).toBe("vscode://vscode-remote/ssh-remote+sol.local/home/theo/code/my%20repo");
   });
 
   it("uses the fork's scheme", () => {

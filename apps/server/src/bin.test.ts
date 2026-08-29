@@ -91,8 +91,6 @@ const makeCliTestServerConfig = (baseDir: string) =>
       desktopBootstrapToken: undefined,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
-      tailscaleServeEnabled: false,
-      tailscaleServePort: 443,
       basePath: "",
     } satisfies ServerConfig.ServerConfig["Service"];
   });
