@@ -243,7 +243,7 @@ describe("mobile cloud link environment client", () => {
             {
               _tag: "RelayEnvironmentLinkProofInvalidError",
               code: "environment_link_proof_invalid",
-              reason: "origin_not_allowed",
+              reason: "endpoint_not_secure",
               traceId: "trace-test",
             },
             { status: 400 },
@@ -261,7 +261,7 @@ describe("mobile cloud link environment client", () => {
       expect(error).toMatchObject({
         _tag: "CloudEnvironmentLinkError",
         message:
-          "https://relay.example.test/v1/client/environment-links failed: Relay rejected the environment link proof (origin_not_allowed).",
+          "https://relay.example.test/v1/client/environment-links failed: Relay rejected the environment link proof (endpoint_not_secure).",
         traceId: "trace-test",
       });
       expect(fetchMock).toHaveBeenCalledTimes(3);

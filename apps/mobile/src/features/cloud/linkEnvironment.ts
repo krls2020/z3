@@ -211,7 +211,9 @@ export function linkEnvironmentToCloudWithPreference(
     const liveActivitiesEnabled = input.liveActivitiesEnabled;
     const challenge = yield* relayClient
       .createEnvironmentLinkChallenge({
-        clerkToken: input.clerkToken,
+        // Still the Clerk session token; S5-3 sources zeropsToken from the
+        // Zerops session instead.
+        zeropsToken: input.clerkToken,
         payload: {
           notificationsEnabled: true,
           liveActivitiesEnabled,
@@ -247,7 +249,9 @@ export function linkEnvironmentToCloudWithPreference(
       .pipe(Effect.mapError(cloudEnvironmentLinkError("Could not obtain environment link proof.")));
     const link = yield* relayClient
       .linkEnvironment({
-        clerkToken: input.clerkToken,
+        // Still the Clerk session token; S5-3 sources zeropsToken from the
+        // Zerops session instead.
+        zeropsToken: input.clerkToken,
         payload: {
           deviceId,
           proof,

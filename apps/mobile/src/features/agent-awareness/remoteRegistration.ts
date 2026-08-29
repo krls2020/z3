@@ -395,7 +395,9 @@ function registerDeviceWithRelay(
       expectedGeneration,
     });
     yield* client.registerDevice({
-      clerkToken: token,
+      // Still the Clerk session token; S5-3 sources zeropsToken from the
+      // Zerops session instead.
+      zeropsToken: token,
       payload,
     });
     if (expectedGeneration !== deviceRegistrationGeneration) {
@@ -444,7 +446,9 @@ function unregisterDeviceWithRelay(input: {
 
     const client = yield* ManagedRelay.ManagedRelayClient;
     yield* client.unregisterDevice({
-      clerkToken: token,
+      // Still the Clerk session token; S5-3 sources zeropsToken from the
+      // Zerops session instead.
+      zeropsToken: token,
       deviceId: input.deviceId,
     });
   });
@@ -544,7 +548,9 @@ function readAgentActivitySnapshot(): Effect.Effect<
       return null;
     }
     const client = yield* ManagedRelay.ManagedRelayClient;
-    return yield* client.getAgentActivitySnapshot({ clerkToken: token });
+    // Still the Clerk session token; S5-3 sources zeropsToken from the Zerops
+    // session instead.
+    return yield* client.getAgentActivitySnapshot({ zeropsToken: token });
   }).pipe(
     Effect.catch((error) =>
       Effect.sync(() => {
@@ -568,7 +574,9 @@ function registerLiveActivityWithRelay(
 
     const client = yield* ManagedRelay.ManagedRelayClient;
     yield* client.registerLiveActivity({
-      clerkToken: token,
+      // Still the Clerk session token; S5-3 sources zeropsToken from the
+      // Zerops session instead.
+      zeropsToken: token,
       payload: body,
     });
     return true;
