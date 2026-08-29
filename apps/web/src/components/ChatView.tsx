@@ -170,7 +170,10 @@ import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { ZeropsPanel } from "./zerops/ZeropsPanel";
 import { ZeropsLifecycleStrip } from "./zerops/ZeropsLifecycleStrip";
-import { useZeropsTopology } from "../zerops/useZeropsFeeds";
+import { ZeropsAgentAuthCard } from "./zerops/ZeropsAgentAuthCard";
+import { zeropsAgentAuthNeedsAttention } from "../zerops/agentLogin";
+import { useAgentLogin } from "../zerops/useAgentLogin";
+import { useZeropsAgentAuth, useZeropsTopology } from "../zerops/useZeropsFeeds";
 import {
   deriveAgentPanelModel,
   foldSubagentActivities,
@@ -3479,6 +3482,11 @@ function ChatViewContent(props: ChatViewProps) {
   // plain answer rather than an error, so it simply hides the surface.
   const zeropsAvailable =
     useZeropsTopology(activeThreadRef?.environmentId ?? null)?.available === true;
+  // The "no authenticated provider" surface for a Zerops thread: shown beside
+  // ProviderStatusBanner below, only while at least one agent CLI needs the
+  // user's attention (S7 plan D4).
+  const zeropsAgentAuth = useZeropsAgentAuth(activeThreadRef?.environmentId ?? null);
+  const signInToZeropsAgent = useAgentLogin(activeThreadRef);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -6961,11 +6969,16 @@ function ChatViewContent(props: ChatViewProps) {
               </div>
             ) : null}
             {/* Provider status overlays the timeline without changing its content height. */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col items-center">
               <ProviderStatusBanner
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
               />
+              {zeropsAgentAuth !== undefined && zeropsAgentAuthNeedsAttention(zeropsAgentAuth) ? (
+                <div className="pointer-events-auto mx-auto w-fit max-w-[calc(100%-2rem)] pt-3">
+                  <ZeropsAgentAuthCard onSignIn={signInToZeropsAgent} snapshot={zeropsAgentAuth} />
+                </div>
+              ) : null}
             </div>
             {/* Messages Wrapper */}
             <div className="relative flex min-h-0 flex-1 flex-col">

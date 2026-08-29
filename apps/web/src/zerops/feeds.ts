@@ -1,16 +1,19 @@
 /**
- * The two Zerops server feeds, as atoms.
+ * The three Zerops server feeds, as atoms.
  *
  * - **topology** — one per environment (a z3 environment is one Zerops
  *   project): what exists, for the service map.
  * - **lifecycle** — one per thread: where the agent is, for the strip and the
  *   cards.
+ * - **agentAuth** — one per environment: which agent CLIs are signed in, for
+ *   the sign-in card (S7 plan D1/D3).
  *
- * Both are read-only, and both are *snapshot*-typed rather than delta-typed:
- * every emission is the whole state. That is what makes a reconnect free —
- * `subscribeDynamic` re-invokes the RPC on the new session and the first
- * emission is a fresh snapshot, so there is no re-`get` to arrange and no
- * accumulator that could drift. `feeds.test.ts` pins it rather than assuming it.
+ * All three are read-only, and all three are *snapshot*-typed rather than
+ * delta-typed: every emission is the whole state. That is what makes a
+ * reconnect free — `subscribeDynamic` re-invokes the RPC on the new session
+ * and the first emission is a fresh snapshot, so there is no re-`get` to
+ * arrange and no accumulator that could drift. `feeds.test.ts` pins it rather
+ * than assuming it.
  *
  * The factory takes its runtime so a test can supply a fake
  * `EnvironmentRegistry`; the app's instance is wired in `../state/zerops.ts`.
@@ -22,6 +25,7 @@ import { WS_METHODS } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ThreadId,
+  ZeropsAgentAuthSnapshot,
   ZeropsLifecycle,
   ZeropsTopologySnapshot,
 } from "@t3tools/contracts";
@@ -38,6 +42,11 @@ export interface ZeropsLifecycleTarget {
   readonly input: { readonly threadId: ThreadId };
 }
 
+export interface ZeropsAgentAuthTarget {
+  readonly environmentId: EnvironmentId;
+  readonly input: Record<string, never>;
+}
+
 const targetKey = (target: {
   readonly environmentId: EnvironmentId;
   readonly input: unknown;
@@ -52,6 +61,11 @@ export function createZeropsFeedAtoms<R, E>(runtime: Atom.AtomRuntime<Environmen
   const lifecycle = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
     label: "environment-data:zerops:lifecycle",
     tag: WS_METHODS.subscribeZeropsLifecycle,
+  });
+
+  const agentAuth = createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+    label: "environment-data:zerops:agentAuth",
+    tag: WS_METHODS.subscribeZeropsAgentAuth,
   });
 
   /**
@@ -78,11 +92,20 @@ export function createZeropsFeedAtoms<R, E>(runtime: Atom.AtomRuntime<Environmen
     ).pipe(Atom.withLabel(`zerops:lifecycle-value:${key}`));
   });
 
+  const agentAuthValue = Atom.family((key: string) => {
+    const [environmentId, input] = JSON.parse(key) as [EnvironmentId, Record<string, never>];
+    return Atom.make((get): ZeropsAgentAuthSnapshot | undefined =>
+      Option.getOrUndefined(AsyncResult.value(get(agentAuth({ environmentId, input })))),
+    ).pipe(Atom.withLabel(`zerops:agentAuth-value:${key}`));
+  });
+
   return {
     topology,
     lifecycle,
+    agentAuth,
     topologyValue: (target: ZeropsTopologyTarget) => topologyValue(targetKey(target)),
     lifecycleValue: (target: ZeropsLifecycleTarget) => lifecycleValue(targetKey(target)),
+    agentAuthValue: (target: ZeropsAgentAuthTarget) => agentAuthValue(targetKey(target)),
   };
 }
 
