@@ -10,12 +10,12 @@ project:
 
 services:
   - hostname: db
-    type: postgresql@16
-    mode: single
+    type: postgresql:single@16
     priority: 10
 
   - hostname: relay
-    type: nodejs@22
+    type: ubuntu/nodejs@22
+    mode: NON_HA
     buildFromGit: https://github.com/krls2020/z3
     enableSubdomainAccess: true
     verticalAutoscaling:
