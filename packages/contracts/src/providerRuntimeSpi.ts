@@ -14,6 +14,13 @@
  *   (49 `type`-discriminated members) + the `streamEvents` port. No typed
  *   `toolCall` view yet (SPI-4); no versioned adapter gate reads this
  *   constant yet — it exists so a later slice has one to check against.
+ * - (no version bump, 2026-08-29, SPI-5): `apps/server/src/spi/driverHomes.ts`,
+ *   `driverLaunch.ts`, `acpSupport.ts`, `openCodeRuntime.ts`, and
+ *   `claudeProvider.ts` add small owned, typed capabilities (each with a
+ *   contract test) wrapping the driver-internal filesystem/home-dir,
+ *   launch-arg, ACP session, and model/effort surfaces `textGeneration/**`
+ *   and `usage/**` previously imported from `provider/**` directly. Additive
+ *   server-side wrapping only — `ProviderRuntimeEventV2` is unchanged.
  *
  * @module providerRuntimeSpi
  */

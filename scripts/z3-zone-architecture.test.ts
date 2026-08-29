@@ -175,4 +175,58 @@ it.layer(NodeServices.layer)("z3 zone architecture", (it) => {
         assert.deepStrictEqual([...violations].sort(), KNOWN_OWNED_PRODUCT_PROVIDER_VIOLATIONS);
       }),
   );
+
+  it.effect(
+    "textGeneration/ and usage/ reach provider internals only through spi/, never directly",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* repoRoot;
+
+        // The sole sanctioned service-tag file (methodology §3.2, SPI-5):
+        // `ProviderInstanceRegistry` is how `TextGeneration.ts` resolves a
+        // `ProviderInstanceId` to its live instance — the same seam
+        // `ProviderRuntimeEventBus`/`ProviderRegistryTest` are for
+        // `apps/server/src/zerops/**`. Every other provider-internal need
+        // (driver home/launch-arg resolution, ACP session surfaces, the
+        // OpenCode runtime, the Claude model/effort catalog) is wrapped by
+        // an owned, typed capability under `apps/server/src/spi/`. Listed
+        // explicitly, no wildcard: a second file needing this exception is
+        // a new decision, not an automatic grant.
+        const ALLOWED_PROVIDER_IMPORT_FILES: ReadonlyArray<string> = [
+          path.join(root, "apps/server/src/provider/Services/ProviderInstanceRegistry.ts"),
+        ];
+
+        function isAllowedProviderImport(fromFile: string, specifier: string): boolean {
+          if (!specifier.includes("/provider/")) {
+            return true;
+          }
+          const resolved = path.resolve(path.dirname(fromFile), specifier);
+          return ALLOWED_PROVIDER_IMPORT_FILES.includes(resolved);
+        }
+
+        const targets = [
+          ...(yield* collectTsFiles(path.join(root, "apps/server/src/textGeneration"))),
+          ...(yield* collectTsFiles(path.join(root, "apps/server/src/usage"))),
+        ];
+        assert.isAbove(
+          targets.length,
+          0,
+          "the textGeneration/usage scan found no files; did a path move?",
+        );
+
+        const violations: Array<ImportViolation> = [];
+        for (const file of targets) {
+          const source = yield* fs.readFileString(file);
+          for (const { specifier } of collectImportStatements(source)) {
+            if (!isAllowedProviderImport(file, specifier)) {
+              violations.push({ file: path.relative(root, file), specifier });
+            }
+          }
+        }
+
+        assert.deepStrictEqual(violations, []);
+      }),
+  );
 });

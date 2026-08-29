@@ -30,7 +30,7 @@ import {
   currentGrokReasoningEffortFromSessionSetup,
   makeGrokAcpRuntime,
   resolveGrokAcpBaseModelId,
-} from "../provider/acp/GrokAcpSupport.ts";
+} from "../spi/acpSupport.ts";
 
 const GROK_TIMEOUT_MS = 180_000;
 
