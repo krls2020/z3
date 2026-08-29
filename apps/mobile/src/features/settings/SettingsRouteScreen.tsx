@@ -28,7 +28,6 @@ import {
   refreshAgentAwarenessRegistration,
   subscribeAgentAwarenessRegistrationStatus,
 } from "../agent-awareness/remoteRegistration";
-import { refreshManagedRelayEnvironments } from "../cloud/managedRelayState";
 import { hasCloudPublicConfig, resolveRelayClerkTokenOptions } from "../cloud/publicConfig";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
@@ -326,7 +325,6 @@ function ConfiguredSettingsRouteScreen() {
     }
 
     savePreferences({ liveActivitiesEnabled: true });
-    refreshManagedRelayEnvironments();
     setLiveActivityStatus("enabled");
     // The environment link can succeed while this device's own registration
     // (the push-to-start token the relay needs) has not — don't claim Live
@@ -410,7 +408,6 @@ function ConfiguredSettingsRouteScreen() {
             return;
           }
           savePreferences({ liveActivitiesEnabled: false });
-          refreshManagedRelayEnvironments();
         })();
         return;
       }
