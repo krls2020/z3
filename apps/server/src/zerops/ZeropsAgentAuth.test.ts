@@ -1,0 +1,67 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { buildSnapshot, computeAgentAuthState } from "./ZeropsAgentAuth.ts";
+
+// The §3 W-STATE matrix (docs/spec-welcome-mode.md), pinned verbatim against
+// `vscode-bootstrap-welcome.js`'s `computeAgentState`. `credVerifiable` is
+// dropped here: both agents this feed reports on (claude-code, codex) always
+// have a verified probe, so every row already fully determines the result
+// from flagToken/flagOAuth/credPresent alone — exactly as the welcome.js
+// source comment says.
+describe("computeAgentAuthState", () => {
+  it.each([
+    { flagOAuth: false, flagToken: false, credPresent: false, expected: "not-authorized" },
+    { flagOAuth: false, flagToken: false, credPresent: true, expected: "local-only" },
+    { flagOAuth: true, flagToken: false, credPresent: true, expected: "authorized" },
+    { flagOAuth: true, flagToken: false, credPresent: false, expected: "reconnect" },
+    { flagOAuth: false, flagToken: true, credPresent: false, expected: "authorized-token" },
+    { flagOAuth: false, flagToken: true, credPresent: true, expected: "authorized-token" },
+    // flagToken wins even when flagOAuth is also set, matching welcome.js's
+    // `if (flagToken) return "authorized-token"` short-circuit before flagOAuth.
+    { flagOAuth: true, flagToken: true, credPresent: false, expected: "authorized-token" },
+  ])("flagOAuth=$flagOAuth flagToken=$flagToken credPresent=$credPresent -> $expected", (row) => {
+    expect(computeAgentAuthState(row)).toBe(row.expected);
+  });
+});
+
+describe("buildSnapshot", () => {
+  it("reads both agents' flags from the env store by suffix", () => {
+    const snapshot = buildSnapshot(
+      { ZCP_AGENT_OAUTH_CLAUDE_CODE: "true", ZCP_AGENT_TOKEN_CODEX: "sometoken" },
+      { "claude-code": true, codex: false },
+    );
+    expect(snapshot.available).toBe(true);
+    expect(snapshot.agents).toEqual([
+      {
+        agentId: "claude-code",
+        credPresent: true,
+        flagOAuth: true,
+        flagToken: false,
+        state: "authorized",
+      },
+      {
+        agentId: "codex",
+        credPresent: false,
+        flagOAuth: false,
+        flagToken: true,
+        state: "authorized-token",
+      },
+    ]);
+  });
+
+  it("treats a missing env store as no flags set", () => {
+    const snapshot = buildSnapshot(undefined, { "claude-code": false, codex: true });
+    expect(snapshot.agents.find((agent) => agent.agentId === "claude-code")?.state).toBe(
+      "not-authorized",
+    );
+    expect(snapshot.agents.find((agent) => agent.agentId === "codex")?.state).toBe("local-only");
+  });
+
+  it('only treats the exact string "true" as the OAuth flag being set', () => {
+    const snapshot = buildSnapshot(
+      { ZCP_AGENT_OAUTH_CLAUDE_CODE: "false" },
+      { "claude-code": false, codex: false },
+    );
+    expect(snapshot.agents.find((agent) => agent.agentId === "claude-code")?.flagOAuth).toBe(false);
+  });
+});
