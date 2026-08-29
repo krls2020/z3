@@ -104,6 +104,20 @@ export const mergeAgentAuthLogin = (
   agents: snapshot.agents.map((agent) => ({ ...agent, login: logins[agent.agentId] })),
 });
 
+/**
+ * Field-by-field equality for one agent's login state (S7 fix2 finding 2) —
+ * every field the wire type carries: `phase`, `url`, `code`, `message`,
+ * `terminalId`, `startedAt`. Mirrors `ZeropsAgentAuth.ts`'s own
+ * `snapshotsEqual`/`agentAuthEqual` dedup pattern.
+ */
+export const loginStateEqual = (a: ZeropsAgentLoginState, b: ZeropsAgentLoginState): boolean =>
+  a.phase === b.phase &&
+  a.url === b.url &&
+  a.code === b.code &&
+  a.message === b.message &&
+  a.terminalId === b.terminalId &&
+  DateTime.Equivalence(a.startedAt, b.startedAt);
+
 export class ZeropsAgentLogin extends Context.Service<
   ZeropsAgentLogin,
   {
@@ -182,22 +196,32 @@ export const make = (options: ZeropsAgentLoginOptions) =>
     // never decoded/compared as data, so a Ref buys nothing here.
     const sessions = new Map<ZeropsAgentId, ActiveSession>();
 
-    /**
-     * Unlike `ZeropsAgentAuth`'s `publish` (which rebuilds a full snapshot
-     * from raw inputs on every watcher tick and so needs a content-equality
-     * dedup to avoid spurious republishes), every call here follows a
-     * deliberate transition `setLoginState`/`clearLoginState` just made —
-     * nothing to dedup against.
-     */
     const publish = Ref.get(state).pipe(
       Effect.flatMap((current) => PubSub.publish(changes, current.logins)),
       Effect.asVoid,
     );
 
+    /**
+     * Skips the update+publish when `login` is field-by-field identical to
+     * what is already stored for this agent (S7 fix2 finding 2): a login
+     * session in `menu`/`awaiting-browser` re-feeds an unrecognized TUI
+     * screen's output on every PTY chunk — a live-observed redraw republished
+     * 15 identical `menu` states in 4.5s. `handleOutputChunk` reconstructs a
+     * full `ZeropsAgentLoginState` on every chunk regardless of whether the
+     * walker actually found a transition, so the dedup has to live here,
+     * not at the call site.
+     */
     const setLoginState = (agentId: ZeropsAgentId, login: ZeropsAgentLoginState) =>
-      Ref.update(state, (current) => ({
-        logins: { ...current.logins, [agentId]: login },
-      })).pipe(Effect.andThen(publish));
+      Effect.gen(function* () {
+        const before = (yield* Ref.get(state)).logins[agentId];
+        if (before !== undefined && loginStateEqual(before, login)) {
+          return;
+        }
+        yield* Ref.update(state, (current) => ({
+          logins: { ...current.logins, [agentId]: login },
+        }));
+        yield* publish;
+      });
 
     const clearLoginState = (agentId: ZeropsAgentId) =>
       Ref.update(state, (current) => ({

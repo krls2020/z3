@@ -11,6 +11,7 @@ import type {
 } from "@t3tools/contracts";
 import { ZeropsAgentLoginError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -217,6 +218,47 @@ it.effect("an auth URL chunk moves the phase to awaiting-browser with the url", 
       );
     }),
   ),
+);
+
+it.effect(
+  "an unrecognized menu screen redrawn identically does not republish (S7 fix2 finding 2)",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fakeTerminal = yield* makeFakeTerminalManager();
+        const fakeAuth = yield* makeFakeAuth();
+        const feed = yield* ZeropsAgentLoginModule.make({
+          terminalManager: fakeTerminal.service,
+          zeropsAgentAuth: fakeAuth,
+          isZeropsEnvironment: true,
+        });
+
+        yield* feed.start("claude-code", "thread-1");
+        const subscription = yield* feed.subscribe;
+        const firstPublished = yield* Stream.runHead(subscription.changes).pipe(Effect.forkChild);
+
+        const unrecognizedMenu =
+          "Select login method:\n1. Claude account with subscription\n2. Anthropic Console account\n";
+        // Five identical redraws of the same unrecognized menu screen (the
+        // live-observed case: 15 identical `menu` chunks in 4.5s) must not
+        // each republish — only the URL chunk below, the first REAL
+        // transition, should reach the subscriber.
+        for (let i = 0; i < 5; i += 1) {
+          yield* fakeTerminal.emit("thread-1", "agent-login-claude-code", unrecognizedMenu);
+        }
+        yield* fakeTerminal.emit(
+          "thread-1",
+          "agent-login-claude-code",
+          "Browser didn't open? Use the url below to sign in (c to copy)\nhttps://claude.com/cai/oauth/authorize?state=abc\n",
+        );
+
+        const published = yield* Fiber.join(firstPublished);
+        assert.equal(
+          published._tag === "Some" ? loginOf(published.value, "claude-code")?.phase : undefined,
+          "awaiting-browser",
+        );
+      }),
+    ),
 );
 
 it.effect("codex: url and device code together move to awaiting-browser with both", () =>

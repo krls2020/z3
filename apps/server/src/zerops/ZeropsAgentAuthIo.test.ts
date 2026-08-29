@@ -238,6 +238,74 @@ it.layer(NodeServices.layer, { excludeTestServices: true })(
     );
 
     it.effect(
+      "a credential removal (logout) requests its own targeted check and flips providerAuth to unauthenticated (S7 fix2 F1)",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { fs, path, homeDir, envStorePath } = yield* makeEnv();
+            const fake = yield* makeFakeCli(() =>
+              Effect.succeed({
+                key: "ZCP_AGENT_OAUTH_CLAUDE_CODE",
+                changed: true,
+                migrated: false,
+              }),
+            );
+            // The first check (credential present) reads authenticated; the
+            // SECOND check (after removal) must actually run — a fake that
+            // always answers the same way either way could not tell a real
+            // fix from the old bug (no second check at all).
+            const answers = yield* Ref.make<ReadonlyArray<ServerProviderAuthStatus>>([
+              "authenticated",
+              "unauthenticated",
+            ]);
+            const calls = yield* Ref.make<ReadonlyArray<ZeropsAgentId>>([]);
+            const refreshProviderAuth = (agentId: ZeropsAgentId) =>
+              Effect.gen(function* () {
+                yield* Ref.update(calls, (all) => [...all, agentId]);
+                const [next, ...rest] = yield* Ref.get(answers);
+                yield* Ref.set(answers, rest);
+                return next ?? "unauthenticated";
+              });
+            const fakeWatch = makeFakeWatch();
+
+            const feed = yield* ZeropsAgentAuth.make({
+              cli: fake.cli,
+              refreshProviderAuth,
+              homeDir,
+              envStorePath,
+              isZeropsEnvironment: true,
+              watch: fakeWatch.watch,
+            });
+
+            const subscription = yield* feed.subscribe;
+            const target = credWatchTarget(homeDir, "claude-code");
+            const credentialPath = path.join(homeDir, ".claude", ".credentials.json");
+
+            yield* writeCredential(fs, path, homeDir, [".claude", ".credentials.json"]);
+            fakeWatch.trigger(target);
+            const authenticated = yield* changeWhere(subscription, claudeAuthResolved);
+            assert.equal(agentState(authenticated, "claude-code")?.providerAuth, "authenticated");
+
+            yield* fs.remove(credentialPath);
+            fakeWatch.trigger(target);
+            const afterRemoval = yield* changeWhere(
+              subscription,
+              (snapshot) => agentState(snapshot, "claude-code")?.providerAuth === "unauthenticated",
+            );
+
+            const claude = agentState(afterRemoval, "claude-code");
+            assert.equal(claude?.credPresent, false);
+            assert.equal(claude?.providerAuth, "unauthenticated");
+            assert.deepEqual(yield* Ref.get(calls), ["claude-code", "claude-code"]);
+            // The removal's own check reads unauthenticated, so it is never
+            // eligible to spawn mark-oauth — only the first (authenticated)
+            // check was.
+            assert.deepEqual(yield* Ref.get(fake.calls), ["claude-code"]);
+          }),
+        ),
+    );
+
+    it.effect(
       "does not spawn mark-oauth when the credential appears but the provider is not authenticated",
       () =>
         Effect.scoped(
