@@ -38,6 +38,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -46,7 +47,11 @@ import * as TestClock from "effect/testing/TestClock";
 import { PROVIDER_RUNTIME_SPI_VERSION, type SpiEvent } from "@t3tools/contracts";
 
 import { ProviderService } from "../provider/Services/ProviderService.ts";
-import { ProviderRuntimeEventBus, ProviderRuntimeEventBusLive } from "./ProviderRuntimeEventBus.ts";
+import {
+  ProviderRuntimeEventBus,
+  ProviderRuntimeEventBusLive,
+  ProviderRuntimeEventBusTest,
+} from "./ProviderRuntimeEventBus.ts";
 
 interface FakeEvent {
   readonly id: number;
@@ -220,5 +225,198 @@ describe("ProviderRuntimeEventBus (the owned wrapper)", () => {
         yield* Fiber.interrupt(consumer);
         expect(yield* Ref.get(receivedRef)).toEqual([{ id: "evt-late" }]);
       }),
+  );
+});
+
+/** A Claude `item.completed` for one MCP tool call — `ClaudeAdapter.ts:2762-2766`. */
+const claudeToolCallEvent = (options: {
+  readonly toolName?: string;
+  readonly content?: unknown;
+}): SpiEvent =>
+  ({
+    eventId: "evt-1",
+    provider: "claudeAgent",
+    threadId: "thread-1",
+    createdAt: "2026-08-29T00:00:00Z",
+    type: "item.completed",
+    itemId: "item-1",
+    payload: {
+      itemType: "mcp_tool_call",
+      status: "completed",
+      data: {
+        toolName: options.toolName ?? "mcp__zerops__zerops_workflow",
+        input: { action: "status" },
+        result: {
+          type: "tool_result",
+          content: options.content ?? [{ type: "text", text: "## Status\nPhase: idle\n" }],
+        },
+      },
+    },
+  }) as unknown as SpiEvent;
+
+/** A `command_execution` item whose `data` this module's Claude reader cannot read — a shape regression. */
+const unrecognizedCommandExecutionEvent = (eventId: string): SpiEvent =>
+  ({
+    eventId,
+    provider: "claudeAgent",
+    threadId: "thread-1",
+    createdAt: "2026-08-29T00:00:00Z",
+    type: "item.completed",
+    itemId: eventId,
+    payload: {
+      itemType: "command_execution",
+      status: "completed",
+      // No `toolName` — the shape this module's Claude reader expects.
+      data: { command: "ls" },
+    },
+  }) as unknown as SpiEvent;
+
+describe("ProviderRuntimeEventBus — SPI-4 tool-call enrichment", () => {
+  it.effect("adds toolCall to a recognized item event, on the Live bus", () =>
+    Effect.gen(function* () {
+      const providerLayer = Layer.mock(ProviderService)({
+        streamEvents: Stream.make(claudeToolCallEvent({})),
+      });
+
+      const received = yield* Effect.gen(function* () {
+        const bus = yield* ProviderRuntimeEventBus;
+        return yield* Stream.runCollect(bus.events);
+      }).pipe(Effect.provide(ProviderRuntimeEventBusLive.pipe(Layer.provide(providerLayer))));
+
+      const [event] = Array.from(received);
+      expect(event?.toolCall?.name).toBe("zerops_workflow");
+      expect(event?.toolCall?.result?.text).toBe("## Status\nPhase: idle\n");
+    }),
+  );
+
+  it.effect("ProviderRuntimeEventBusTest.make applies the same enrichment", () =>
+    Effect.gen(function* () {
+      const received = yield* Effect.gen(function* () {
+        const bus = yield* ProviderRuntimeEventBus;
+        return yield* Stream.runCollect(bus.events);
+      }).pipe(
+        Effect.provide(ProviderRuntimeEventBusTest.make(Stream.make(claudeToolCallEvent({})))),
+      );
+
+      const [event] = Array.from(received);
+      expect(event?.toolCall?.name).toBe("zerops_workflow");
+    }),
+  );
+
+  it.effect("leaves a non-tool event untouched (no toolCall added)", () =>
+    Effect.gen(function* () {
+      const providerLayer = Layer.mock(ProviderService)({
+        streamEvents: Stream.make({ id: "evt-1" } as unknown as SpiEvent),
+      });
+
+      const received = yield* Effect.gen(function* () {
+        const bus = yield* ProviderRuntimeEventBus;
+        return yield* Stream.runCollect(bus.events);
+      }).pipe(Effect.provide(ProviderRuntimeEventBusLive.pipe(Layer.provide(providerLayer))));
+
+      expect(Array.from(received)).toEqual([{ id: "evt-1" }]);
+    }),
+  );
+
+  it.effect(
+    "reports an enrichment failure for a tool-lifecycle item whose shape is not recognized",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const providerLayer = Layer.mock(ProviderService)({
+            streamEvents: Stream.make(unrecognizedCommandExecutionEvent("evt-bad")),
+          });
+
+          const { events, failures } = yield* Effect.gen(function* () {
+            const bus = yield* ProviderRuntimeEventBus;
+            const failuresRef = yield* Ref.make<ReadonlyArray<unknown>>([]);
+            const failuresConsumer = yield* Stream.runForEach(bus.enrichmentFailures, (failure) =>
+              Ref.update(failuresRef, (current) => [...current, failure]),
+            ).pipe(Effect.forkChild);
+            yield* advanceTestClock(50);
+
+            const events = yield* Stream.runCollect(bus.events);
+            yield* advanceTestClock(50);
+
+            yield* Fiber.interrupt(failuresConsumer);
+            const failures = yield* Ref.get(failuresRef);
+            return { events, failures };
+          }).pipe(Effect.provide(ProviderRuntimeEventBusLive.pipe(Layer.provide(providerLayer))));
+
+          // The event itself passes through with no toolCall — a recognized
+          // failure is not a dropped event.
+          const [event] = Array.from(events);
+          expect(event?.toolCall).toBeUndefined();
+
+          const [failure] = failures as ReadonlyArray<{
+            readonly eventId: string;
+            readonly provider: string;
+            readonly itemType: string;
+            readonly reason: string;
+          }>;
+          expect(failure?.eventId).toBe("evt-bad");
+          expect(failure?.provider).toBe("claudeAgent");
+          expect(failure?.itemType).toBe("command_execution");
+          expect(failure?.reason).toContain("toolName");
+        }),
+      ),
+  );
+
+  it.effect(
+    "logs the enrichment-failure warning once per (provider, itemType, reason) signature, even across many events",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const messages: Array<unknown> = [];
+          const logger = Logger.make<unknown, void>((options) => {
+            if (Array.isArray(options.message)) {
+              messages.push(...options.message);
+            } else {
+              messages.push(options.message);
+            }
+          });
+
+          const providerLayer = Layer.mock(ProviderService)({
+            streamEvents: Stream.make(
+              unrecognizedCommandExecutionEvent("evt-bad-1"),
+              unrecognizedCommandExecutionEvent("evt-bad-2"),
+              unrecognizedCommandExecutionEvent("evt-bad-3"),
+            ),
+          });
+
+          const failures = yield* Effect.gen(function* () {
+            const bus = yield* ProviderRuntimeEventBus;
+            const failuresRef = yield* Ref.make<ReadonlyArray<unknown>>([]);
+            const failuresConsumer = yield* Stream.runForEach(bus.enrichmentFailures, (failure) =>
+              Ref.update(failuresRef, (current) => [...current, failure]),
+            ).pipe(Effect.forkChild);
+            yield* advanceTestClock(50);
+
+            yield* Stream.runDrain(bus.events);
+            yield* advanceTestClock(50);
+
+            yield* Fiber.interrupt(failuresConsumer);
+            return yield* Ref.get(failuresRef);
+          }).pipe(
+            Effect.provide(
+              Layer.mergeAll(
+                ProviderRuntimeEventBusLive.pipe(Layer.provide(providerLayer)),
+                Logger.layer([logger], { mergeWithExisting: false }),
+              ),
+            ),
+          );
+
+          // Every occurrence still reaches the failures channel...
+          expect(failures).toHaveLength(3);
+
+          // ...but the log fires only once for the repeated signature.
+          const warnings = messages.filter(
+            (message) =>
+              typeof message === "string" &&
+              message.includes("SPI enrichment could not read a recognized tool item"),
+          );
+          expect(warnings).toHaveLength(1);
+        }),
+      ),
   );
 });
