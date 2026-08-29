@@ -611,3 +611,73 @@ it.layer(NodeServices.layer, { excludeTestServices: true })(
     );
   },
 );
+
+it.layer(NodeServices.layer, { excludeTestServices: true })(
+  "ZeropsAgentAuth — recheckNow (S7 follow-up F8)",
+  (it) => {
+    it.effect(
+      "requests the same mark-oauth-eligible coalesced check a credential event would",
+      () =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { homeDir, envStorePath } = yield* makeEnv();
+            const fake = yield* makeFakeCli(() =>
+              Effect.succeed({
+                key: "ZCP_AGENT_OAUTH_CLAUDE_CODE",
+                changed: true,
+                migrated: false,
+              }),
+            );
+            const fakeProviderAuth = yield* makeFakeProviderAuth(() => "authenticated");
+            const fakeWatch = makeFakeWatch();
+
+            const feed = yield* ZeropsAgentAuth.make({
+              cli: fake.cli,
+              refreshProviderAuth: fakeProviderAuth.refreshProviderAuth,
+              homeDir,
+              envStorePath,
+              isZeropsEnvironment: true,
+              watch: fakeWatch.watch,
+            });
+
+            const subscription = yield* feed.subscribe;
+            // No credential file was ever written and no watcher fired —
+            // recheckNow alone drives the whole coalesced-check ->
+            // mark-oauth pipeline.
+            yield* feed.recheckNow("claude-code");
+            const published = yield* changeWhere(subscription, claudeAuthResolved);
+
+            assert.equal(agentState(published, "claude-code")?.providerAuth, "authenticated");
+            assert.deepEqual(yield* Ref.get(fake.calls), ["claude-code"]);
+          }),
+        ),
+    );
+
+    it.effect("is a no-op when the feed is off (not a Zerops environment)", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { homeDir, envStorePath } = yield* makeEnv();
+          const fake = yield* makeFakeCli(() =>
+            Effect.fail(new ZeropsCliNotFound({ command: "zcp" })),
+          );
+          const fakeProviderAuth = yield* makeFakeProviderAuth(() => "authenticated");
+          const fakeWatch = makeFakeWatch();
+
+          const feed = yield* ZeropsAgentAuth.make({
+            cli: fake.cli,
+            refreshProviderAuth: fakeProviderAuth.refreshProviderAuth,
+            homeDir,
+            envStorePath,
+            isZeropsEnvironment: false,
+            watch: fakeWatch.watch,
+          });
+
+          yield* feed.recheckNow("claude-code");
+          yield* Effect.sleep("100 millis");
+          assert.deepEqual(yield* Ref.get(fake.calls), []);
+          assert.deepEqual(yield* Ref.get(fakeProviderAuth.calls), []);
+        }),
+      ),
+    );
+  },
+);

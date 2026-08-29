@@ -39,14 +39,11 @@
  */
 import * as NodeOS from "node:os";
 
-import {
-  defaultInstanceIdForDriver,
-  ProviderDriverKind,
-  type ProviderInstanceId,
-  type ServerProviderAuthStatus,
-  type ZeropsAgentAuthSnapshot,
-  type ZeropsAgentAuthState,
-  type ZeropsAgentId,
+import type {
+  ServerProviderAuthStatus,
+  ZeropsAgentAuthSnapshot,
+  ZeropsAgentAuthState,
+  ZeropsAgentId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -66,7 +63,7 @@ import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
-import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import { ProviderInstances } from "../spi/providerInstances.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import { isZeropsEnvironment } from "./ZeropsEnvironment.ts";
 import * as ZeropsCliModule from "./ZeropsCli.ts";
@@ -88,27 +85,6 @@ export const AGENT_OAUTH_SUFFIX: Readonly<Record<ZeropsAgentId, string>> = {
   "claude-code": "CLAUDE_CODE",
   codex: "CODEX",
 };
-
-/**
- * `ProviderDriverKind` for each agent's built-in driver
- * (`apps/server/src/provider/Drivers/{Claude,Codex}Driver.ts`'s own
- * `DRIVER_KIND` constants) — Claude Code's driver kind is `"claudeAgent"`,
- * not `"claude-code"` or `"claude"`.
- */
-const AGENT_DRIVER_KIND: Readonly<Record<ZeropsAgentId, string>> = {
-  "claude-code": "claudeAgent",
-  codex: "codex",
-};
-
-/**
- * The provider instance this feed checks for each agent — the driver's
- * default (single-instance) id, per `defaultInstanceIdForDriver`. A user who
- * configures a SECOND instance of the same driver (e.g. `codex_work`) is not
- * specially handled: this feed, like the rest of the §3 credential-probe
- * model, assumes one login per container.
- */
-export const agentDefaultInstanceId = (agentId: ZeropsAgentId): ProviderInstanceId =>
-  defaultInstanceIdForDriver(ProviderDriverKind.make(AGENT_DRIVER_KIND[agentId]));
 
 /**
  * The §3 W-STATE matrix, verbatim from `vscode-bootstrap-welcome.js`'s
@@ -220,21 +196,28 @@ export class ZeropsAgentAuth extends Context.Service<
       never,
       Scope.Scope
     >;
+    /**
+     * Requests the same coalesced, mark-oauth-eligible provider check a
+     * credential-file event would (S7 follow-up F8: `ZeropsAgentLogin` calls
+     * this once its output parser sees the CLI's own success line, so a
+     * server-driven login re-uses this feed's existing verification +
+     * single-flight + latch machinery instead of duplicating it). A no-op
+     * when the feed is off (`isZeropsEnvironment: false`).
+     */
+    readonly recheckNow: (agentId: ZeropsAgentId) => Effect.Effect<void>;
   }
 >()("t3/zerops/ZeropsAgentAuth") {}
 
 export interface ZeropsAgentAuthOptions {
   readonly cli: Pick<ZeropsCli["Service"], "markAgentOAuth">;
   /**
-   * A TARGETED, single-instance refresh of one agent's default provider
-   * (`providerRegistry.refreshInstance(agentDefaultInstanceId(agentId))` at
-   * {@link layer}, never the registry-wide `refresh()` — that probes every
-   * configured provider), reduced to the fresh `auth.status`. Presence of
-   * the credential FILE is not proof of a working login (a stale or
-   * unusable credential can exist on disk), so this — not `credPresent` — is
-   * what gates the `mark-oauth` spawn. Coalescing a burst of credential
-   * events into one call here is `make`'s own job (see
-   * `PROVIDER_CHECK_DEBOUNCE_MS`), not this function's.
+   * The agent's own verified login status (`ZeropsAgentAuthVerify.verifyAgentAuth`
+   * at {@link layer} — see the module header's "How it verifies"), NOT the
+   * provider registry's probe. Presence of the credential FILE is not proof
+   * of a working login (a stale or unusable credential can exist on disk),
+   * so this — not `credPresent` — is what gates the `mark-oauth` spawn.
+   * Coalescing a burst of credential events into one call here is `make`'s
+   * own job (see `PROVIDER_CHECK_DEBOUNCE_MS`), not this function's.
    */
   readonly refreshProviderAuth: (agentId: ZeropsAgentId) => Effect.Effect<ServerProviderAuthStatus>;
   /** Resolved the same way the provider drivers do by default: `os.homedir()`, never `CLAUDE_CONFIG_DIR`. */
@@ -342,6 +325,7 @@ export const make = (options: ZeropsAgentAuthOptions) =>
         latest,
         changes: Stream.fromPubSub(changes),
         subscribe: subscribeBeforeSnapshot(changes, latest, subscribeMutex),
+        recheckNow: () => Effect.void,
       } satisfies ZeropsAgentAuth["Service"];
     }
 
@@ -611,6 +595,9 @@ export const make = (options: ZeropsAgentAuthOptions) =>
       latest,
       changes: Stream.fromPubSub(changes),
       subscribe: subscribeBeforeSnapshot(changes, latest, subscribeMutex),
+      // Mark-oauth-eligible, exactly like a credential-file event — see the
+      // Service interface doc comment.
+      recheckNow: (agentId) => requestProviderCheck(agentId, { fromCredential: true }),
     } satisfies ZeropsAgentAuth["Service"];
   });
 
@@ -618,21 +605,20 @@ export const layer = Layer.effect(
   ZeropsAgentAuth,
   Effect.gen(function* () {
     const cli = yield* ZeropsCli;
-    const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+    const providerInstances = yield* ProviderInstances;
     const processRunner = yield* ProcessRunner.ProcessRunner;
     const config = yield* ServerConfig;
     const spawnProbe = spawnAgentAuthProbe(processRunner, config.cwd);
 
     /**
-     * Best-effort cache warm for the provider driver picker — never a
-     * source of truth here (see the module header's "How it verifies"),
-     * so a failure is swallowed rather than let it disturb this feed's own
-     * check.
+     * Best-effort cache warm for the provider driver picker (owned SPI
+     * capability, `spi/providerInstances.ts` — this module never imports
+     * `provider/**` directly, methodology §3.2) — never a source of truth
+     * here (see the module header's "How it verifies"), so a failure is
+     * swallowed rather than let it disturb this feed's own check.
      */
     const refreshProviderCache = (agentId: ZeropsAgentId): Effect.Effect<void> =>
-      providerRegistry
-        .refreshInstance(agentDefaultInstanceId(agentId))
-        .pipe(Effect.asVoid, Effect.ignore);
+      providerInstances.refreshForAgent(agentId).pipe(Effect.ignore);
 
     const refreshProviderAuth = (agentId: ZeropsAgentId): Effect.Effect<ServerProviderAuthStatus> =>
       verifyAgentAuth(agentId, spawnProbe).pipe(Effect.tap(() => refreshProviderCache(agentId)));
