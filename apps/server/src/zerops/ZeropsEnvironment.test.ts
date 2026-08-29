@@ -14,6 +14,7 @@ const input = (overrides?: Partial<Parameters<typeof resolveZeropsEnvironment>[0
   apiHost: undefined,
   allowedOrigins: [],
   membershipTtlSeconds: undefined,
+  publicOrigin: undefined,
   ...overrides,
 });
 
@@ -87,6 +88,26 @@ describe("resolveZeropsEnvironment — the one detection rule", () => {
         input({ projectId: "abc", allowedOrigins: ["https://app.zerops.io"] }),
       )?.allowedOrigins,
       ["https://app.zerops.io"],
+    );
+  });
+
+  it("leaves the public origin undefined unless configured", () => {
+    assert.strictEqual(
+      resolveZeropsEnvironment(input({ projectId: "abc" }))?.publicOrigin,
+      undefined,
+    );
+  });
+
+  it("trims a configured public origin, and blanks it out entirely", () => {
+    assert.strictEqual(
+      resolveZeropsEnvironment(
+        input({ projectId: "abc", publicOrigin: "  https://zcp-26a7-8080.prg1.zerops.app  " }),
+      )?.publicOrigin,
+      "https://zcp-26a7-8080.prg1.zerops.app",
+    );
+    assert.strictEqual(
+      resolveZeropsEnvironment(input({ projectId: "abc", publicOrigin: "   " }))?.publicOrigin,
+      undefined,
     );
   });
 });

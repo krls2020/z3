@@ -1,7 +1,4 @@
-import type {
-  RelayClientDeviceRecord,
-  RelayDeviceRegistrationRequest,
-} from "@t3tools/contracts/relay";
+import type { RelayDeviceRegistrationRequest } from "@t3tools/contracts/relay";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -41,18 +38,6 @@ export class DeviceUnregistrationPersistenceError extends Schema.TaggedErrorClas
   }
 }
 
-export class DeviceListPersistenceError extends Schema.TaggedErrorClass<DeviceListPersistenceError>()(
-  "DeviceListPersistenceError",
-  {
-    userId: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to list mobile devices for ${this.userId}.`;
-  }
-}
-
 export class Devices extends Context.Service<
   Devices,
   {
@@ -64,9 +49,6 @@ export class Devices extends Context.Service<
       readonly userId: string;
       readonly deviceId: string;
     }) => Effect.Effect<void, DeviceUnregistrationPersistenceError>;
-    readonly listForUser: (input: {
-      readonly userId: string;
-    }) => Effect.Effect<ReadonlyArray<RelayClientDeviceRecord>, DeviceListPersistenceError>;
   }
 >()("t3code-relay/agentActivity/Devices") {}
 
@@ -81,11 +63,10 @@ export const make = Effect.gen(function* () {
       const updatedAt = DateTime.formatIso(yield* DateTime.now);
       const registration = input.registration;
 
-      // The drizzle handle is alchemy's lazy proxy chain: it only becomes a
-      // real Effect when consumed via `yield*`. Handing it to Effect.all sends
-      // the raw Proxy into the fiber runtime, which spins the isolate at 100%
-      // CPU (registrations then hang until the client aborts) — keep every db
-      // chain directly yielded.
+      // Each drizzle query-builder chain only becomes a real Effect when
+      // consumed via `yield*` — handing one to `Effect.all` instead sends the
+      // lazy builder itself into the fiber runtime rather than its result.
+      // Keep every db chain directly yielded, not batched.
       if (registration.pushToken) {
         yield* db
           .update(relayMobileDevices)
@@ -177,8 +158,8 @@ export const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({
         "relay.mobile.device_id": input.deviceId,
       });
-      // Same proxy-chain constraint as register above: db chains must be
-      // consumed via `yield*`, never passed to Effect.all.
+      // Same constraint as register above: db chains must be consumed via
+      // `yield*`, never passed to Effect.all.
       yield* db
         .delete(relayLiveActivities)
         .where(
@@ -217,43 +198,6 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
-    }),
-    listForUser: Effect.fn("relay.devices.listForUser")(function* (input) {
-      const rows = yield* db
-        .select({
-          deviceId: relayMobileDevices.deviceId,
-          label: relayMobileDevices.label,
-          platform: relayMobileDevices.platform,
-          iosMajorVersion: relayMobileDevices.iosMajorVersion,
-          appVersion: relayMobileDevices.appVersion,
-          preferences: relayMobileDevices.preferencesJson,
-          updatedAt: relayMobileDevices.updatedAt,
-        })
-        .from(relayMobileDevices)
-        .where(eq(relayMobileDevices.userId, input.userId))
-        .pipe(
-          Effect.mapError(
-            (cause) => new DeviceListPersistenceError({ userId: input.userId, cause }),
-          ),
-        );
-      return rows.map((row) => ({
-        deviceId: row.deviceId,
-        label: row.label,
-        platform: row.platform,
-        iosMajorVersion: row.iosMajorVersion,
-        appVersion: row.appVersion,
-        notifications: {
-          enabled: row.preferences.notificationsEnabled,
-          notifyOnApproval: row.preferences.notifyOnApproval,
-          notifyOnInput: row.preferences.notifyOnInput,
-          notifyOnCompletion: row.preferences.notifyOnCompletion,
-          notifyOnFailure: row.preferences.notifyOnFailure,
-        },
-        liveActivities: {
-          enabled: row.preferences.liveActivitiesEnabled,
-        },
-        updatedAt: row.updatedAt,
-      }));
     }),
   });
 });

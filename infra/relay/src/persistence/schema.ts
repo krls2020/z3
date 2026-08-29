@@ -3,6 +3,7 @@ import type {
   RelayAgentActivityState,
   RelayAgentAwarenessPreferences,
 } from "@t3tools/contracts/relay";
+import type { SignedApnsDeliveryJob } from "../agentActivity/apnsDeliveryJobs.ts";
 import {
   boolean,
   index,
@@ -69,9 +70,12 @@ export const relayEnvironmentLinks = pgTable(
     endpointHttpBaseUrl: text("endpoint_http_base_url").notNull(),
     endpointWsBaseUrl: text("endpoint_ws_base_url").notNull(),
     endpointProviderKind: varchar("endpoint_provider_kind", { length: 32 }).notNull(),
+    // The Zerops project this environment was proven to belong to at link
+    // time (ZeropsProjectBinding.verify) — the environment's own claim,
+    // verified against the linking user's Zerops token.
+    zeropsProjectId: varchar("zerops_project_id", { length: 191 }).notNull().default(""),
     notificationsEnabled: boolean("notifications_enabled").notNull().default(true),
     liveActivitiesEnabled: boolean("live_activities_enabled").notNull().default(true),
-    managedTunnelsEnabled: boolean("managed_tunnels_enabled").notNull().default(false),
     createdByDeviceId: varchar("created_by_device_id", { length: 191 }),
     revokedAt: varchar("revoked_at", { length: 64 }),
     createdAt: varchar("created_at", { length: 64 }).notNull(),
@@ -82,33 +86,6 @@ export const relayEnvironmentLinks = pgTable(
     index("idx_relay_environment_links_environment").on(table.environmentId, table.revokedAt),
   ],
 );
-
-export const relayManagedEndpointAllocations = pgTable(
-  "relay_managed_endpoint_allocations",
-  {
-    userId: varchar("user_id", { length: 191 }).notNull(),
-    environmentId: varchar("environment_id", { length: 191 }).notNull(),
-    hostname: text("hostname").notNull(),
-    tunnelId: varchar("tunnel_id", { length: 191 }),
-    tunnelName: text("tunnel_name").notNull(),
-    dnsRecordId: varchar("dns_record_id", { length: 191 }),
-    readyAt: varchar("ready_at", { length: 64 }),
-    createdAt: varchar("created_at", { length: 64 }).notNull(),
-    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
-  },
-  (table) => [
-    primaryKey({ columns: [table.userId, table.environmentId] }),
-    uniqueIndex("idx_relay_managed_endpoint_allocations_hostname").on(table.hostname),
-    uniqueIndex("idx_relay_managed_endpoint_allocations_tunnel_name").on(table.tunnelName),
-  ],
-);
-
-export const relayManagedTunnelLimits = pgTable("relay_managed_tunnel_limits", {
-  userId: varchar("user_id", { length: 191 }).primaryKey(),
-  maxTunnels: integer("max_tunnels").notNull(),
-  createdAt: varchar("created_at", { length: 64 }).notNull(),
-  updatedAt: varchar("updated_at", { length: 64 }).notNull(),
-});
 
 export const relayEnvironmentCredentials = pgTable(
   "relay_environment_credentials",
@@ -188,4 +165,31 @@ export const relayDpopProofs = pgTable(
     primaryKey({ columns: [table.thumbprint, table.jti] }),
     index("idx_relay_dpop_proofs_expires_at").on(table.expiresAt),
   ],
+);
+
+export const RELAY_APNS_DELIVERY_JOB_STATES = ["queued", "leased", "done", "dead"] as const;
+export type RelayApnsDeliveryJobState = (typeof RELAY_APNS_DELIVERY_JOB_STATES)[number];
+
+// The durable replacement for the Cloudflare APNs delivery queue: a job is
+// inserted here (state=queued) before its publish request is acknowledged,
+// leased by `SELECT ... FOR UPDATE SKIP LOCKED`, retried with backoff on
+// failure, and dead-lettered after too many attempts. `jobId` is the signed
+// payload's own id, so `onConflictDoNothing` on it is the queue's dedupe.
+export const relayApnsDeliveryJobs = pgTable(
+  "relay_apns_delivery_jobs",
+  {
+    jobId: varchar("job_id", { length: 64 }).primaryKey(),
+    payloadJson: jsonb("payload_json").notNull().$type<SignedApnsDeliveryJob>(),
+    availableAt: varchar("available_at", { length: 64 }).notNull(),
+    leaseUntil: varchar("lease_until", { length: 64 }),
+    attempts: integer("attempts").notNull().default(0),
+    state: varchar("state", { length: 16 })
+      .notNull()
+      .default("queued")
+      .$type<RelayApnsDeliveryJobState>(),
+    lastError: text("last_error"),
+    createdAt: varchar("created_at", { length: 64 }).notNull(),
+    updatedAt: varchar("updated_at", { length: 64 }).notNull(),
+  },
+  (table) => [index("idx_relay_apns_delivery_jobs_lease").on(table.state, table.availableAt)],
 );
