@@ -308,3 +308,60 @@ export const ZeropsLifecycleGetInput = Schema.Struct({
   threadId: ThreadId,
 });
 export type ZeropsLifecycleGetInput = typeof ZeropsLifecycleGetInput.Type;
+
+// ---------------------------------------------------------------------------
+// Agent authorization
+// ---------------------------------------------------------------------------
+
+/**
+ * Agents with a live-verified local credential probe
+ * (docs/spec-welcome-mode.md §3 W-STATE) — the only two this feed reports on.
+ * An agent without a verified probe would render every row "not-authorized"
+ * regardless of platform truth, which is worse than not offering it. A
+ * closed union, unlike {@link ZeropsAdoptionState}: this is a fixed pair, not
+ * an open vocabulary zcp grows independently.
+ */
+export const ZeropsAgentId = Schema.Literals(["claude-code", "codex"]);
+export type ZeropsAgentId = typeof ZeropsAgentId.Type;
+
+/**
+ * The §3 W-STATE matrix, five values, mirrored verbatim from
+ * `vscode-bootstrap-welcome.js`'s `computeAgentState` (docs/spec-welcome-mode.md
+ * §3): the platform flag and the local credential artifact are two
+ * INDEPENDENT inputs that compose a matrix, never a boolean union. Unlike
+ * {@link ZeropsAdoptionState}/the envelope's `phase`, this value is computed
+ * by z3 itself (never received verbatim from zcp on the wire), so a closed
+ * union is safe here.
+ */
+export const ZeropsAgentAuthState = Schema.Literals([
+  "authorized-token",
+  "authorized",
+  "reconnect",
+  "local-only",
+  "not-authorized",
+]);
+export type ZeropsAgentAuthState = typeof ZeropsAgentAuthState.Type;
+
+export const ZeropsAgentAuth = Schema.Struct({
+  agentId: ZeropsAgentId,
+  /** Whether the local credential artifact exists. Presence only — its contents are never read. */
+  credPresent: Schema.Boolean,
+  /** `ZCP_AGENT_OAUTH_<SUFFIX>=true` in the zembed env store. */
+  flagOAuth: Schema.Boolean,
+  /** `ZCP_AGENT_TOKEN_<SUFFIX>` present (any value) in the zembed env store. */
+  flagToken: Schema.Boolean,
+  state: ZeropsAgentAuthState,
+});
+export type ZeropsAgentAuth = typeof ZeropsAgentAuth.Type;
+
+/**
+ * `available: false` means this is not a Zerops environment — the feed is off
+ * and that is not an error, mirroring {@link ZeropsTopologySnapshot}.
+ */
+export const ZeropsAgentAuthSnapshot = Schema.Struct({
+  available: Schema.Boolean,
+  /** Why the feed is unavailable. Absent when it is available. */
+  reason: Schema.optional(Schema.String),
+  agents: Schema.Array(ZeropsAgentAuth),
+});
+export type ZeropsAgentAuthSnapshot = typeof ZeropsAgentAuthSnapshot.Type;
