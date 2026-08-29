@@ -23,6 +23,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { ServerConfig } from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { parseMarkAgentOAuthOutput, type MarkAgentOAuthResult } from "./zeropsAgentAuthParse.ts";
 import { parseZeropsTopology, type ZeropsTopologyRead } from "./zeropsTopologyParse.ts";
 
 /** The binary `zcp init` installs on every Zerops container. */
@@ -30,6 +31,9 @@ const ZCP_COMMAND = "zcp";
 const TOPOLOGY_TIMEOUT = Duration.seconds(20);
 /** One read of a small project is ~0.26 s; the cap only guards a pathological answer. */
 const TOPOLOGY_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+const MARK_OAUTH_TIMEOUT = Duration.seconds(15);
+/** The output is one short JSON line; the cap only guards a pathological answer. */
+const MARK_OAUTH_MAX_OUTPUT_BYTES = 64 * 1024;
 
 /**
  * `zcp` is not installed — this is not a Zerops environment. Distinct from
@@ -86,6 +90,14 @@ export class ZeropsCli extends Context.Service<
     readonly watchDoorbell: (
       onEvent: (event: ZeropsDoorbellEvent) => Effect.Effect<void>,
     ) => Effect.Effect<void, ZeropsCliError>;
+    /**
+     * Runs `zcp agent mark-oauth <agent-id>` — the platform-flag half of the
+     * §3 W-STATE auth matrix (docs/spec-welcome-mode.md §4 W-AUTH). Never
+     * prints or receives a credential value, only the flag key it upserted.
+     */
+    readonly markAgentOAuth: (
+      agentId: string,
+    ) => Effect.Effect<MarkAgentOAuthResult, ZeropsCliError>;
   }
 >()("t3/zerops/ZeropsCli") {}
 
@@ -173,6 +185,50 @@ export const make = (options: ZeropsCliOptions) =>
         }),
       );
 
+    const markAgentOAuth = (agentId: string): Effect.Effect<MarkAgentOAuthResult, ZeropsCliError> =>
+      processRunner
+        .run({
+          command,
+          args: [...baseArgs, "agent", "mark-oauth", agentId],
+          cwd,
+          timeout: MARK_OAUTH_TIMEOUT,
+          maxOutputBytes: MARK_OAUTH_MAX_OUTPUT_BYTES,
+          outputMode: "truncate",
+        })
+        .pipe(
+          Effect.mapError(
+            (cause): ZeropsCliError =>
+              cause._tag === "ProcessSpawnError"
+                ? spawnErrorToCliError(command, cause.cause)
+                : new ZeropsCliFailed({ command, reason: cause.message }),
+          ),
+          Effect.flatMap((result) => {
+            if (result.code !== 0) {
+              return Effect.fail(
+                new ZeropsCliFailed({
+                  command,
+                  reason: firstDiagnosticLine(
+                    result.stderr,
+                    `agent mark-oauth exited ${result.code}`,
+                  ),
+                }),
+              );
+            }
+            const parsed = parseMarkAgentOAuthOutput(result.stdout);
+            return parsed === undefined
+              ? Effect.fail(
+                  new ZeropsCliFailed({
+                    command,
+                    reason: firstDiagnosticLine(
+                      result.stderr,
+                      "agent mark-oauth did not print a result document",
+                    ),
+                  }),
+                )
+              : Effect.succeed(parsed);
+          }),
+        );
+
     const watchDoorbell = (
       onEvent: (event: ZeropsDoorbellEvent) => Effect.Effect<void>,
     ): Effect.Effect<void, ZeropsCliError> =>
@@ -224,7 +280,7 @@ export const make = (options: ZeropsCliOptions) =>
         }),
       );
 
-    return { readTopology, watchDoorbell } satisfies ZeropsCli["Service"];
+    return { readTopology, watchDoorbell, markAgentOAuth } satisfies ZeropsCli["Service"];
   });
 
 /**
