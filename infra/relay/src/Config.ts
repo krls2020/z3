@@ -25,8 +25,6 @@ export class RelayConfiguration extends Context.Service<
     readonly apnsDeliveryJobSigningSecret: Redacted.Redacted<string>;
     readonly cloudMintPrivateKey: Redacted.Redacted<string>;
     readonly cloudMintPublicKey: string;
-    readonly managedEndpointBaseDomain: string | undefined;
-    readonly managedEndpointNamespace: string | undefined;
   }
 >()("t3code-relay/Config/RelayConfiguration") {}
 

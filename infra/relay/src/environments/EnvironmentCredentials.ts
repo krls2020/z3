@@ -6,7 +6,7 @@ import * as Encoding from "effect/Encoding";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { and, eq, exists, isNull, ne, notExists } from "drizzle-orm";
+import { and, eq, exists, isNull, ne } from "drizzle-orm";
 import { QueryBuilder } from "drizzle-orm/pg-core";
 
 import * as RelayDb from "../db.ts";
@@ -43,18 +43,6 @@ export class EnvironmentCredentialAuthenticatePersistenceError extends Schema.Ta
   }
 }
 
-export class EnvironmentCredentialRevokePersistenceError extends Schema.TaggedErrorClass<EnvironmentCredentialRevokePersistenceError>()(
-  "EnvironmentCredentialRevokePersistenceError",
-  {
-    environmentId: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to revoke credentials for environment '${this.environmentId}'`;
-  }
-}
-
 export interface EnvironmentCredentialPrincipal {
   readonly credentialId: string;
   readonly environmentId: string;
@@ -74,10 +62,6 @@ export class EnvironmentCredentials extends Context.Service<
       Option.Option<EnvironmentCredentialPrincipal>,
       EnvironmentCredentialAuthenticatePersistenceError
     >;
-    readonly revokeForEnvironmentPublicKey: (input: {
-      readonly environmentId: string;
-      readonly environmentPublicKey: string;
-    }) => Effect.Effect<boolean, EnvironmentCredentialRevokePersistenceError>;
   }
 >()("t3code-relay/environments/EnvironmentCredentials") {}
 
@@ -238,51 +222,6 @@ const make = Effect.gen(function* () {
             environmentPublicKey: row.environmentPublicKey,
           })
         : Option.none();
-    }),
-
-    revokeForEnvironmentPublicKey: Effect.fn(
-      "relay.environment_credentials.revoke_for_environment_public_key",
-    )(function* (input) {
-      yield* Effect.annotateCurrentSpan({ "relay.environment_id": input.environmentId });
-      const revokedAt = DateTime.formatIso(yield* DateTime.now);
-      const rows = yield* db
-        .update(relayEnvironmentCredentials)
-        .set({
-          revokedAt,
-          updatedAt: revokedAt,
-        })
-        .where(
-          and(
-            eq(relayEnvironmentCredentials.environmentId, input.environmentId),
-            eq(relayEnvironmentCredentials.environmentPublicKey, input.environmentPublicKey),
-            isNull(relayEnvironmentCredentials.revokedAt),
-            notExists(
-              new QueryBuilder()
-                .select({ userId: relayEnvironmentLinks.userId })
-                .from(relayEnvironmentLinks)
-                .where(
-                  and(
-                    eq(relayEnvironmentLinks.environmentId, input.environmentId),
-                    eq(relayEnvironmentLinks.environmentPublicKey, input.environmentPublicKey),
-                    isNull(relayEnvironmentLinks.revokedAt),
-                  ),
-                ),
-            ),
-          ),
-        )
-        .returning({
-          credentialId: relayEnvironmentCredentials.credentialId,
-        })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentCredentialRevokePersistenceError({
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
-      return rows.length > 0;
     }),
   });
 });

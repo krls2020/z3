@@ -19,7 +19,6 @@ import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
 import * as EnvironmentCredentials from "./EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
-import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
 import * as RelayConfiguration from "../Config.ts";
 
 export class EnvironmentLinkProofExpired extends Schema.TaggedErrorClass<EnvironmentLinkProofExpired>()(
@@ -51,7 +50,6 @@ export class EnvironmentLinkProofInvalid extends Schema.TaggedErrorClass<Environ
       "validate_expiration",
       "consume_proof_nonce",
       "consume_challenge_nonce",
-      "validate_origin",
       "validate_endpoint",
     ]),
     cause: Schema.optional(Schema.Defect()),
@@ -67,8 +65,7 @@ export type EnvironmentLinkError =
   | EnvironmentLinkProofInvalid
   | DpopProofs.DpopProofReplayPersistenceError
   | EnvironmentLinks.EnvironmentLinkUpsertPersistenceError
-  | EnvironmentCredentials.EnvironmentCredentialCreatePersistenceError
-  | ManagedEndpointProvider.ManagedEndpointProviderError;
+  | EnvironmentCredentials.EnvironmentCredentialCreatePersistenceError;
 
 export class EnvironmentLinker extends Context.Service<
   EnvironmentLinker,
@@ -80,9 +77,6 @@ export class EnvironmentLinker extends Context.Service<
       {
         readonly environmentId: RelayEnvironmentLinkProofPayload["environmentId"];
         readonly endpoint: RelayEnvironmentLinkProofPayload["endpoint"];
-        readonly endpointRuntime:
-          | ManagedEndpointProvider.ManagedEndpointProvisioningResult["runtime"]
-          | null;
         readonly environmentCredential: string;
       },
       EnvironmentLinkError
@@ -97,16 +91,17 @@ function proofAuthorizesRequestedCapabilities(
   request: RelayEnvironmentLinkRequest,
 ): boolean {
   const scopes = new Set(proof.scopes);
-  if (request.managedTunnelsEnabled && !scopes.has("managed_tunnels")) {
-    return false;
-  }
   return !(
     (request.notificationsEnabled || request.liveActivitiesEnabled) &&
     !scopes.has("agent_activity_notifications")
   );
 }
 
-function isSecureManagedEndpoint(endpoint: RelayEnvironmentLinkProofPayload["endpoint"]): boolean {
+// Every environment this relay links now runs on Zerops, reached over its own
+// public HTTPS subdomain — there is no more relay-provisioned tunnel to make
+// an endpoint secure. This check is what is left of that: the environment
+// must present a genuinely secure address, not a loopback stand-in.
+function isSecureEndpoint(endpoint: RelayEnvironmentLinkProofPayload["endpoint"]): boolean {
   try {
     const httpUrl = new URL(endpoint.httpBaseUrl);
     const wsUrl = new URL(endpoint.wsBaseUrl);
@@ -116,29 +111,9 @@ function isSecureManagedEndpoint(endpoint: RelayEnvironmentLinkProofPayload["end
   }
 }
 
-function normalizeHostname(hostname: string): string {
-  return hostname
-    .trim()
-    .toLowerCase()
-    .replace(/^\[(.*)\]$/u, "$1");
-}
-
-function isLoopbackManagedTunnelOrigin(
-  origin: RelayEnvironmentLinkProofPayload["origin"],
-): boolean {
-  const hostname = normalizeHostname(origin.localHttpHost);
-  return (
-    (hostname === "127.0.0.1" || hostname === "::1" || hostname === "localhost") &&
-    Number.isInteger(origin.localHttpPort) &&
-    origin.localHttpPort > 0 &&
-    origin.localHttpPort <= 65_535
-  );
-}
-
 const make = Effect.gen(function* () {
   const links = yield* EnvironmentLinks.EnvironmentLinks;
   const credentials = yield* EnvironmentCredentials.EnvironmentCredentials;
-  const managedEndpointProvider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
   const proofReplay = yield* DpopProofs.DpopProofReplay;
   const relayTokens = yield* RelayTokens.RelayTokens;
   const config = yield* RelayConfiguration.RelayConfiguration;
@@ -174,7 +149,6 @@ const make = Effect.gen(function* () {
         "relay.environment_id": candidate.environmentId,
         "relay.link.notifications_enabled": input.request.notificationsEnabled,
         "relay.link.live_activities_enabled": input.request.liveActivitiesEnabled,
-        "relay.link.managed_tunnels_enabled": input.request.managedTunnelsEnabled,
       });
       if (candidate.exp <= nowSeconds) {
         return yield* new EnvironmentLinkProofExpired({
@@ -230,7 +204,6 @@ const make = Effect.gen(function* () {
         request: {
           notificationsEnabled: input.request.notificationsEnabled,
           liveActivitiesEnabled: input.request.liveActivitiesEnabled,
-          managedTunnelsEnabled: input.request.managedTunnelsEnabled,
         },
         nowEpochSeconds: nowSeconds,
       });
@@ -279,48 +252,7 @@ const make = Effect.gen(function* () {
           stage: "consume_challenge_nonce",
         });
       }
-      if (input.request.managedTunnelsEnabled && !isLoopbackManagedTunnelOrigin(verified.origin)) {
-        return yield* new EnvironmentLinkProofInvalid({
-          userId: input.userId,
-          environmentId: verified.environmentId,
-          reason: "origin_not_allowed",
-          stage: "validate_origin",
-        });
-      }
-      // Downgrading a managed link to publish-only must release the tunnel and
-      // DNS that were provisioned for it — nothing else cleans them up until a
-      // full unlink. Best effort: a cleanup failure must not block the link
-      // itself, and the provider treats an absent allocation as already
-      // deprovisioned, so retrying on every non-tunnel link is cheap.
-      if (!input.request.managedTunnelsEnabled) {
-        yield* managedEndpointProvider
-          .deprovision({
-            userId: input.userId,
-            environmentId: verified.environmentId,
-          })
-          .pipe(
-            Effect.tapError((error) =>
-              Effect.logWarning("managed endpoint deprovision on publish-only link failed", {
-                environmentId: verified.environmentId,
-                errorTag: error._tag,
-              }),
-            ),
-            Effect.ignore,
-          );
-      }
-      const provisioned = input.request.managedTunnelsEnabled
-        ? yield* managedEndpointProvider.provision({
-            userId: input.userId,
-            environmentId: verified.environmentId,
-            origin: verified.origin,
-          })
-        : null;
-      const endpoint = provisioned?.endpoint ?? verified.endpoint;
-      // The secure-endpoint requirement only matters when the relay advertises
-      // this endpoint for other devices to reach (managed tunnel). Publish-only
-      // links are reached out of band (e.g. Tailscale) and their stored endpoint
-      // is never used for routing, so a nominal endpoint is acceptable.
-      if (input.request.managedTunnelsEnabled && !isSecureManagedEndpoint(endpoint)) {
+      if (!isSecureEndpoint(verified.endpoint)) {
         return yield* new EnvironmentLinkProofInvalid({
           userId: input.userId,
           environmentId: verified.environmentId,
@@ -328,15 +260,14 @@ const make = Effect.gen(function* () {
           stage: "validate_endpoint",
         });
       }
-      yield* links.upsert({ ...input, proof: verified, endpoint });
+      yield* links.upsert({ ...input, proof: verified, endpoint: verified.endpoint });
       const environmentCredential = yield* credentials.create({
         environmentId: verified.environmentId,
         environmentPublicKey: verified.environmentPublicKey,
       });
       return {
         environmentId: verified.environmentId,
-        endpoint,
-        endpointRuntime: provisioned?.runtime ?? null,
+        endpoint: verified.endpoint,
         environmentCredential,
       };
     }),

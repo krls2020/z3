@@ -46,8 +46,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
   clerkJwtAudience: "t3-code-relay",
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 });
 
 const apnsSigningKeyPair = NodeCrypto.generateKeyPairSync("ec", {

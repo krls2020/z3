@@ -1,7 +1,4 @@
-import type {
-  RelayClientDeviceRecord,
-  RelayDeviceRegistrationRequest,
-} from "@t3tools/contracts/relay";
+import type { RelayDeviceRegistrationRequest } from "@t3tools/contracts/relay";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -41,18 +38,6 @@ export class DeviceUnregistrationPersistenceError extends Schema.TaggedErrorClas
   }
 }
 
-export class DeviceListPersistenceError extends Schema.TaggedErrorClass<DeviceListPersistenceError>()(
-  "DeviceListPersistenceError",
-  {
-    userId: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to list mobile devices for ${this.userId}.`;
-  }
-}
-
 export class Devices extends Context.Service<
   Devices,
   {
@@ -64,9 +49,6 @@ export class Devices extends Context.Service<
       readonly userId: string;
       readonly deviceId: string;
     }) => Effect.Effect<void, DeviceUnregistrationPersistenceError>;
-    readonly listForUser: (input: {
-      readonly userId: string;
-    }) => Effect.Effect<ReadonlyArray<RelayClientDeviceRecord>, DeviceListPersistenceError>;
   }
 >()("t3code-relay/agentActivity/Devices") {}
 
@@ -217,43 +199,6 @@ export const make = Effect.gen(function* () {
               }),
           ),
         );
-    }),
-    listForUser: Effect.fn("relay.devices.listForUser")(function* (input) {
-      const rows = yield* db
-        .select({
-          deviceId: relayMobileDevices.deviceId,
-          label: relayMobileDevices.label,
-          platform: relayMobileDevices.platform,
-          iosMajorVersion: relayMobileDevices.iosMajorVersion,
-          appVersion: relayMobileDevices.appVersion,
-          preferences: relayMobileDevices.preferencesJson,
-          updatedAt: relayMobileDevices.updatedAt,
-        })
-        .from(relayMobileDevices)
-        .where(eq(relayMobileDevices.userId, input.userId))
-        .pipe(
-          Effect.mapError(
-            (cause) => new DeviceListPersistenceError({ userId: input.userId, cause }),
-          ),
-        );
-      return rows.map((row) => ({
-        deviceId: row.deviceId,
-        label: row.label,
-        platform: row.platform,
-        iosMajorVersion: row.iosMajorVersion,
-        appVersion: row.appVersion,
-        notifications: {
-          enabled: row.preferences.notificationsEnabled,
-          notifyOnApproval: row.preferences.notifyOnApproval,
-          notifyOnInput: row.preferences.notifyOnInput,
-          notifyOnCompletion: row.preferences.notifyOnCompletion,
-          notifyOnFailure: row.preferences.notifyOnFailure,
-        },
-        liveActivities: {
-          enabled: row.preferences.liveActivitiesEnabled,
-        },
-        updatedAt: row.updatedAt,
-      }));
     }),
   });
 });

@@ -56,31 +56,6 @@ export const RelayDeviceRegistrationRequest = Schema.Struct({
 });
 export type RelayDeviceRegistrationRequest = typeof RelayDeviceRegistrationRequest.Type;
 
-export const RelayClientDeviceRecord = Schema.Struct({
-  deviceId: TrimmedNonEmptyString,
-  label: TrimmedNonEmptyString,
-  platform: RelayAgentAwarenessPlatform,
-  iosMajorVersion: Schema.Int.check(Schema.isGreaterThanOrEqualTo(18)),
-  appVersion: Schema.NullOr(TrimmedNonEmptyString),
-  notifications: Schema.Struct({
-    enabled: Schema.Boolean,
-    notifyOnApproval: Schema.Boolean,
-    notifyOnInput: Schema.Boolean,
-    notifyOnCompletion: Schema.Boolean,
-    notifyOnFailure: Schema.Boolean,
-  }),
-  liveActivities: Schema.Struct({
-    enabled: Schema.Boolean,
-  }),
-  updatedAt: TrimmedNonEmptyString,
-});
-export type RelayClientDeviceRecord = typeof RelayClientDeviceRecord.Type;
-
-export const RelayListDevicesResponse = Schema.Struct({
-  devices: Schema.Array(RelayClientDeviceRecord),
-});
-export type RelayListDevicesResponse = typeof RelayListDevicesResponse.Type;
-
 export const RelayLiveActivityRegistrationRequest = Schema.Struct({
   deviceId: TrimmedNonEmptyString,
   activityPushToken: TrimmedNonEmptyString,
@@ -206,10 +181,7 @@ export const RelayAgentActivityPublishRequest = Schema.Struct({
 }).annotate({ description: "Publishes a signed agent-awareness update from an environment." });
 export type RelayAgentActivityPublishRequest = typeof RelayAgentActivityPublishRequest.Type;
 
-export const RelayEnvironmentLinkScope = Schema.Literals([
-  "agent_activity_notifications",
-  "managed_tunnels",
-]);
+export const RelayEnvironmentLinkScope = Schema.Literals(["agent_activity_notifications"]);
 export type RelayEnvironmentLinkScope = typeof RelayEnvironmentLinkScope.Type;
 
 export const RelayEnvironmentLinkProofPayload = Schema.Struct({
@@ -234,9 +206,6 @@ export const RelayEnvironmentLinkChallengeRequest = Schema.Struct({
   liveActivitiesEnabled: Schema.Boolean.annotate({
     description: "Whether this link may update Live Activities.",
   }),
-  managedTunnelsEnabled: Schema.Boolean.annotate({
-    description: "Whether the relay should provision a managed tunnel for this environment.",
-  }),
 }).annotate({ description: "Requested capabilities for a new environment-link challenge." });
 export type RelayEnvironmentLinkChallengeRequest = typeof RelayEnvironmentLinkChallengeRequest.Type;
 
@@ -258,7 +227,6 @@ export const RelayEnvironmentLinkRequest = Schema.Struct({
   }),
   notificationsEnabled: Schema.Boolean,
   liveActivitiesEnabled: Schema.Boolean,
-  managedTunnelsEnabled: Schema.Boolean,
 }).annotate({ description: "Links an authenticated cloud user to a T3 environment." });
 export type RelayEnvironmentLinkRequest = typeof RelayEnvironmentLinkRequest.Type;
 
@@ -267,7 +235,6 @@ export const RelayEnvironmentLinkResponse = Schema.Struct({
   cloudUserId: TrimmedNonEmptyString,
   environmentId: EnvironmentId,
   endpoint: RelayManagedEndpoint,
-  endpointRuntime: Schema.NullOr(RelayManagedEndpointRuntimeConfig),
   relayIssuer: TrimmedNonEmptyString,
   environmentCredential: TrimmedNonEmptyString,
   cloudMintPublicKey: TrimmedNonEmptyString,
@@ -279,7 +246,6 @@ export const RelayEnvironmentLinkProofInvalidReason = Schema.Literals([
   "descriptor_mismatch",
   "replayed_nonce",
   "challenge_invalid",
-  "origin_not_allowed",
   "endpoint_not_secure",
 ]);
 export type RelayEnvironmentLinkProofInvalidReason =
@@ -292,20 +258,6 @@ export const RelayEnvironmentLinkFailedReason = Schema.Literals([
   "internal_error",
 ]);
 export type RelayEnvironmentLinkFailedReason = typeof RelayEnvironmentLinkFailedReason.Type;
-
-export const RelayEnvironmentLinkUnavailableReason = Schema.Literals([
-  "managed_endpoint_not_configured",
-  "managed_endpoint_provisioning_failed",
-]);
-export type RelayEnvironmentLinkUnavailableReason =
-  typeof RelayEnvironmentLinkUnavailableReason.Type;
-
-export const RelayEnvironmentEndpointUnavailableReason = Schema.Literals([
-  "endpoint_request_failed",
-  "endpoint_response_invalid",
-]);
-export type RelayEnvironmentEndpointUnavailableReason =
-  typeof RelayEnvironmentEndpointUnavailableReason.Type;
 
 export const RelayAgentActivityPublishProofInvalidReason = Schema.Literals([
   "invalid_signature_or_payload",
@@ -371,64 +323,6 @@ export class RelayEnvironmentLinkProofInvalidError extends Schema.TaggedErrorCla
   }
 }
 
-export const RelayEnvironmentConnectNotAuthorizedReason = Schema.Literals([
-  "client_proof_key_thumbprint_missing",
-  "environment_link_not_found",
-  "endpoint_provider_not_managed",
-  "managed_endpoint_allocation_not_found",
-  "managed_endpoint_base_domain_not_configured",
-  "managed_endpoint_allocation_not_ready",
-  "managed_endpoint_hostname_invalid",
-  "managed_endpoint_mismatch",
-]);
-export type RelayEnvironmentConnectNotAuthorizedReason =
-  typeof RelayEnvironmentConnectNotAuthorizedReason.Type;
-
-export class RelayEnvironmentConnectNotAuthorizedError extends Schema.TaggedErrorClass<RelayEnvironmentConnectNotAuthorizedError>()(
-  "RelayEnvironmentConnectNotAuthorizedError",
-  {
-    code: Schema.Literal("environment_connect_not_authorized"),
-    // Optional so responses from relays deployed before the reason was
-    // threaded through still decode.
-    reason: Schema.optional(RelayEnvironmentConnectNotAuthorizedReason),
-    traceId: TrimmedNonEmptyString,
-  },
-  { httpApiStatus: 403 },
-) {
-  override get message(): string {
-    return this.reason
-      ? `Relay environment connection is not authorized: ${this.reason}`
-      : "Relay environment connection is not authorized";
-  }
-}
-
-export class RelayEnvironmentEndpointUnavailableError extends Schema.TaggedErrorClass<RelayEnvironmentEndpointUnavailableError>()(
-  "RelayEnvironmentEndpointUnavailableError",
-  {
-    code: Schema.Literal("environment_endpoint_unavailable"),
-    reason: RelayEnvironmentEndpointUnavailableReason,
-    traceId: TrimmedNonEmptyString,
-  },
-  { httpApiStatus: 502 },
-) {
-  override get message(): string {
-    return `Relay environment endpoint is unavailable: ${this.reason}`;
-  }
-}
-
-export class RelayEnvironmentEndpointTimedOutError extends Schema.TaggedErrorClass<RelayEnvironmentEndpointTimedOutError>()(
-  "RelayEnvironmentEndpointTimedOutError",
-  {
-    code: Schema.Literal("environment_endpoint_timed_out"),
-    traceId: TrimmedNonEmptyString,
-  },
-  { httpApiStatus: 504 },
-) {
-  override get message(): string {
-    return "Relay environment endpoint request timed out";
-  }
-}
-
 export class RelayEnvironmentLinkFailedError extends Schema.TaggedErrorClass<RelayEnvironmentLinkFailedError>()(
   "RelayEnvironmentLinkFailedError",
   {
@@ -440,34 +334,6 @@ export class RelayEnvironmentLinkFailedError extends Schema.TaggedErrorClass<Rel
 ) {
   override get message(): string {
     return `Relay environment link failed: ${this.reason}`;
-  }
-}
-
-export class RelayEnvironmentLinkUnavailableError extends Schema.TaggedErrorClass<RelayEnvironmentLinkUnavailableError>()(
-  "RelayEnvironmentLinkUnavailableError",
-  {
-    code: Schema.Literal("environment_link_unavailable"),
-    reason: RelayEnvironmentLinkUnavailableReason,
-    traceId: TrimmedNonEmptyString,
-  },
-  { httpApiStatus: 503 },
-) {
-  override get message(): string {
-    return `Relay environment link is unavailable: ${this.reason}`;
-  }
-}
-
-export class RelayEnvironmentLinkLimitExceededError extends Schema.TaggedErrorClass<RelayEnvironmentLinkLimitExceededError>()(
-  "RelayEnvironmentLinkLimitExceededError",
-  {
-    code: Schema.Literal("environment_link_limit_exceeded"),
-    maxTunnels: Schema.Number,
-    traceId: TrimmedNonEmptyString,
-  },
-  { httpApiStatus: 403 },
-) {
-  override get message(): string {
-    return `Relay managed tunnel limit reached: this account allows at most ${this.maxTunnels} tunnels`;
   }
 }
 
@@ -516,12 +382,7 @@ export const RelayProtectedError = Schema.Union([
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
   RelayEnvironmentLinkProofInvalidError,
-  RelayEnvironmentConnectNotAuthorizedError,
-  RelayEnvironmentEndpointUnavailableError,
-  RelayEnvironmentEndpointTimedOutError,
   RelayEnvironmentLinkFailedError,
-  RelayEnvironmentLinkUnavailableError,
-  RelayEnvironmentLinkLimitExceededError,
   RelayAgentActivityPublishProofExpiredError,
   RelayAgentActivityPublishProofInvalidError,
   RelayInternalError,
@@ -534,17 +395,7 @@ const RelayEnvironmentLinkErrors = [
   RelayAuthInvalidError,
   RelayEnvironmentLinkProofExpiredError,
   RelayEnvironmentLinkProofInvalidError,
-  RelayEnvironmentLinkUnavailableError,
-  RelayEnvironmentLinkLimitExceededError,
   RelayEnvironmentLinkFailedError,
-  RelayInternalError,
-] as const;
-
-const RelayEnvironmentConnectErrors = [
-  RelayAuthInvalidError,
-  RelayEnvironmentConnectNotAuthorizedError,
-  RelayEnvironmentEndpointUnavailableError,
-  RelayEnvironmentEndpointTimedOutError,
   RelayInternalError,
 ] as const;
 
@@ -617,38 +468,6 @@ export class RelayDpopClientAuth extends HttpApiMiddleware.Service<
   error: RelayAuthInvalidError,
   security: { relayDpop: RelayDpopAuthorization },
 }) {}
-
-export const RelayClientEnvironmentRecord = Schema.Struct({
-  environmentId: EnvironmentId,
-  label: TrimmedNonEmptyString,
-  endpoint: RelayManagedEndpoint,
-  linkedAt: TrimmedNonEmptyString,
-});
-export type RelayClientEnvironmentRecord = typeof RelayClientEnvironmentRecord.Type;
-
-export const RelayListEnvironmentsResponse = Schema.Struct({
-  environments: Schema.Array(RelayClientEnvironmentRecord),
-});
-export type RelayListEnvironmentsResponse = typeof RelayListEnvironmentsResponse.Type;
-
-export const RelayEnvironmentConnectRequest = Schema.Struct({
-  deviceId: Schema.optional(
-    TrimmedNonEmptyString.annotate({
-      description: "Optional client device identifier requesting the connection.",
-    }),
-  ),
-  clientKeyThumbprint: Schema.optional(
-    TrimmedNonEmptyString.annotate({
-      description: "Deprecated alias for clientProofKeyThumbprint.",
-    }),
-  ),
-  clientProofKeyThumbprint: Schema.optional(
-    TrimmedNonEmptyString.annotate({
-      description: "JWK thumbprint that the minted environment credential must be bound to.",
-    }),
-  ),
-}).annotate({ description: "Requests a short-lived credential for connecting to an environment." });
-export type RelayEnvironmentConnectRequest = typeof RelayEnvironmentConnectRequest.Type;
 
 export const RelayEnvironmentConnectScope = "environment:connect" as const;
 export const RelayEnvironmentStatusScope = "environment:status" as const;
@@ -726,33 +545,6 @@ export const RelayProtectedResourceMetadata = Schema.Struct({
   dpop_bound_access_tokens_required: Schema.Boolean,
   dpop_signing_alg_values_supported: Schema.Array(Schema.Literal("ES256")),
 });
-
-export const RelayEnvironmentUnlinkParams = Schema.Struct({
-  environmentId: EnvironmentId,
-});
-export type RelayEnvironmentUnlinkParams = typeof RelayEnvironmentUnlinkParams.Type;
-
-export const RelayEnvironmentConnectResponse = Schema.Struct({
-  environmentId: EnvironmentId,
-  endpoint: RelayManagedEndpoint,
-  credential: TrimmedNonEmptyString,
-  expiresAt: TrimmedNonEmptyString,
-});
-export type RelayEnvironmentConnectResponse = typeof RelayEnvironmentConnectResponse.Type;
-
-export const RelayEnvironmentStatusValue = Schema.Literals(["online", "offline"]);
-export type RelayEnvironmentStatusValue = typeof RelayEnvironmentStatusValue.Type;
-
-export const RelayEnvironmentStatusResponse = Schema.Struct({
-  environmentId: EnvironmentId,
-  endpoint: RelayManagedEndpoint,
-  status: RelayEnvironmentStatusValue,
-  checkedAt: TrimmedNonEmptyString,
-  descriptor: Schema.optional(ExecutionEnvironmentDescriptor),
-  error: Schema.optional(TrimmedNonEmptyString),
-  traceId: Schema.optional(TrimmedNonEmptyString),
-});
-export type RelayEnvironmentStatusResponse = typeof RelayEnvironmentStatusResponse.Type;
 
 export const RelayCloudMintCredentialProofPayload = Schema.Struct({
   ...RelaySignedJwtRegisteredClaims,
@@ -946,18 +738,13 @@ export const RelayMobileGroup = HttpApiGroup.make("mobile")
   .annotate(OpenApi.Description, "Mobile push-notification and Live Activity registration.")
   .middleware(RelayDpopClientAuth);
 
-export const RelayClientGroup = HttpApiGroup.make("client")
+// Everything T3 Connect's `client` group used to carry beyond linking
+// (listing environments/devices, unlinking, releasing a managed tunnel) was
+// either tunnel-provisioning machinery that no longer exists once every
+// environment is reached over its own Zerops-provisioned public origin, or
+// surface a later slice (S5-4b/S5-5) rebuilds against this narrower relay.
+export const RelayLinkGroup = HttpApiGroup.make("link")
   .add(
-    HttpApiEndpoint.get("listEnvironments", "/v1/environments", {
-      headers: RelayBearerRequestHeaders,
-      success: RelayListEnvironmentsResponse,
-      error: RelayAuthAndInternalErrors,
-    }).annotate(OpenApi.Summary, "List linked environments"),
-    HttpApiEndpoint.get("listDevices", "/v1/client/devices", {
-      headers: RelayBearerRequestHeaders,
-      success: RelayListDevicesResponse,
-      error: RelayAuthAndInternalErrors,
-    }).annotate(OpenApi.Summary, "List registered mobile devices"),
     HttpApiEndpoint.post("linkEnvironment", "/v1/client/environment-links", {
       headers: RelayBearerRequestHeaders,
       payload: RelayEnvironmentLinkRequest,
@@ -974,29 +761,8 @@ export const RelayClientGroup = HttpApiGroup.make("client")
         error: RelayAuthAndInternalErrors,
       },
     ).annotate(OpenApi.Summary, "Create an environment-link challenge"),
-    HttpApiEndpoint.delete("unlinkEnvironment", "/v1/client/environment-links/:environmentId", {
-      headers: RelayBearerRequestHeaders,
-      params: RelayEnvironmentUnlinkParams,
-      success: RelayOkResponse,
-      error: RelayAuthAndInternalErrors,
-    }).annotate(OpenApi.Summary, "Unlink an environment"),
-    HttpApiEndpoint.delete(
-      "releaseEnvironmentTunnel",
-      "/v1/client/environment-links/:environmentId/tunnel",
-      {
-        headers: RelayBearerRequestHeaders,
-        params: RelayEnvironmentUnlinkParams,
-        success: RelayOkResponse,
-        error: RelayAuthAndInternalErrors,
-      },
-    )
-      .annotate(OpenApi.Summary, "Release an environment's managed tunnel")
-      .annotate(
-        OpenApi.Description,
-        "Deletes the provisioned Cloudflare tunnel while keeping the environment link and its hostname reservation, so a later link re-provisions the tunnel under the same URL. Environments call this when they shut down; Cloudflare bills per provisioned tunnel, so idle tunnels should not outlive their environment.",
-      ),
   )
-  .annotate(OpenApi.Description, "Cloud-user environment links and registered devices.")
+  .annotate(OpenApi.Description, "Links a Zerops-authenticated cloud user to an environment.")
   .middleware(RelayClientAuth);
 
 export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
@@ -1018,38 +784,6 @@ export const RelayExchangeDpopAccessTokenEndpoint = HttpApiEndpoint.post(
 export const RelayTokenGroup = HttpApiGroup.make("token")
   .add(RelayExchangeDpopAccessTokenEndpoint)
   .annotate(OpenApi.Description, "OAuth token exchange for DPoP-bound client access.");
-
-export const RelayConnectEnvironmentEndpoint = HttpApiEndpoint.post(
-  "connectEnvironment",
-  "/v1/environments/:environmentId/connect",
-  {
-    headers: RelayDpopRequestHeaders,
-    params: Schema.Struct({
-      environmentId: EnvironmentId,
-    }),
-    payload: RelayEnvironmentConnectRequest,
-    success: RelayEnvironmentConnectResponse,
-    error: RelayEnvironmentConnectErrors,
-  },
-).annotate(OpenApi.Summary, "Connect to an environment");
-
-export const RelayGetEnvironmentStatusEndpoint = HttpApiEndpoint.post(
-  "getEnvironmentStatus",
-  "/v1/environments/:environmentId/status",
-  {
-    headers: RelayDpopRequestHeaders,
-    params: Schema.Struct({
-      environmentId: EnvironmentId,
-    }),
-    success: RelayEnvironmentStatusResponse,
-    error: RelayEnvironmentConnectErrors,
-  },
-).annotate(OpenApi.Summary, "Check environment status");
-
-export const RelayDpopClientGroup = HttpApiGroup.make("dpopClient")
-  .add(RelayConnectEnvironmentEndpoint, RelayGetEnvironmentStatusEndpoint)
-  .annotate(OpenApi.Description, "DPoP-authenticated client access to linked environments.")
-  .middleware(RelayDpopClientAuth);
 
 export const RelayServerGroup = HttpApiGroup.make("server")
   .add(
@@ -1075,15 +809,14 @@ export const RelayApi = HttpApi.make("RelayApi")
     RelayHealthGroup,
     RelayMetadataGroup,
     RelayMobileGroup,
-    RelayClientGroup,
+    RelayLinkGroup,
     RelayTokenGroup,
-    RelayDpopClientGroup,
     RelayServerGroup,
   )
   .annotate(OpenApi.Title, "T3 Code Relay API")
   .annotate(OpenApi.Version, "1.0.0")
   .annotate(
     OpenApi.Description,
-    "Control-plane API for linking T3 environments, connecting authorized clients, and publishing agent activity.",
+    "Control-plane API for linking T3 environments and publishing agent activity.",
   );
 export type RelayApi = typeof RelayApi;

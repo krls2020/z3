@@ -1,12 +1,11 @@
 import * as NodeCryptoLayer from "@effect/platform-node/NodeCrypto";
 import { describe, expect, it } from "@effect/vitest";
-import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
 import * as RelayConfiguration from "../Config.ts";
+import * as ApnsDeliveryJobStore from "./ApnsDeliveryJobStore.ts";
 import * as ApnsDeliveryQueue from "./ApnsDeliveryQueue.ts";
 
 const config: RelayConfiguration.RelayConfiguration["Service"] = {
@@ -24,25 +23,27 @@ const config: RelayConfiguration.RelayConfiguration["Service"] = {
   apnsDeliveryJobSigningSecret: Redacted.make("apns-job-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 };
 
 describe("ApnsDeliveryQueue", () => {
-  it.effect("does not require the deployment RuntimeContext when building the Worker layer", () => {
-    const sent: unknown[] = [];
-    const sender: Cloudflare.Queues.WriteQueueClient = {
-      raw: Effect.die("raw queue binding is not used"),
-      send: (body) =>
-        Effect.sync(() => {
-          sent.push(body);
-        }),
-      sendBatch: () => Effect.die("batch queue binding is not used"),
-    };
-    const runtimeContext = {} as Alchemy.BaseRuntimeContext;
-    const layer = ApnsDeliveryQueue.layerCloudflareQueues(sender, runtimeContext).pipe(
+  it.effect("sends a job by enqueuing it in the durable job store", () => {
+    const enqueued: Array<unknown> = [];
+    const layer = ApnsDeliveryQueue.layerDbQueue.pipe(
       Layer.provide(NodeCryptoLayer.layer),
       Layer.provide(RelayConfiguration.layer(config)),
+      Layer.provide(
+        Layer.succeed(ApnsDeliveryJobStore.ApnsDeliveryJobs, {
+          enqueue: (job) =>
+            Effect.sync(() => {
+              enqueued.push(job);
+            }),
+          leaseNext: Effect.die("unused leaseNext"),
+          complete: () => Effect.die("unused complete"),
+          fail: () => Effect.die("unused fail"),
+          recoverExpiredLeases: Effect.die("unused recoverExpiredLeases"),
+          expireStale: Effect.die("unused expireStale"),
+        }),
+      ),
     );
 
     return Effect.gen(function* () {
@@ -60,14 +61,19 @@ describe("ApnsDeliveryQueue", () => {
         },
       });
 
-      expect(sent).toHaveLength(1);
+      expect(enqueued).toHaveLength(1);
+      expect(enqueued[0]).toMatchObject({
+        algorithm: "hmac-sha256",
+        payload: { kind: "push_notification", target: { userId: "user-1", deviceId: "device-1" } },
+      });
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("preserves job identity and the queue sender cause", () => {
-    const cause = new Error("queue unavailable");
-    const senderCause = new Cloudflare.Queues.SendError({
-      message: cause.message,
+  it.effect("preserves job identity and the store's persistence-error cause", () => {
+    const cause = new Error("database unavailable");
+    const storeCause = new ApnsDeliveryJobStore.ApnsDeliveryJobPersistError({
+      operation: "enqueue",
+      jobId: "job-1",
       cause,
     });
     const layer = ApnsDeliveryQueue.layer.pipe(
@@ -75,7 +81,7 @@ describe("ApnsDeliveryQueue", () => {
       Layer.provide(RelayConfiguration.layer(config)),
       Layer.provide(
         Layer.succeed(ApnsDeliveryQueue.ApnsDeliveryQueueSender, {
-          send: () => Effect.fail(senderCause),
+          send: () => Effect.fail(storeCause),
         }),
       ),
     );
@@ -104,9 +110,9 @@ describe("ApnsDeliveryQueue", () => {
         kind: "push_notification",
         userId: "user-1",
         deviceId: "device-1",
-        cause: senderCause,
+        cause: storeCause,
       });
-      expect(senderCause.cause).toBe(cause);
+      expect(storeCause.cause).toBe(cause);
       expect(error.message).toBe(
         "Failed to enqueue APNs push notification delivery during send for device device-1.",
       );

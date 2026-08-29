@@ -38,8 +38,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
   clerkJwtAudience: "t3-code-relay",
   cloudMintPrivateKey: Redacted.make(keyPair.privateKey),
   cloudMintPublicKey: keyPair.publicKey,
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 });
 const state: RelayAgentActivityState = {
   environmentId: "env" as RelayAgentActivityState["environmentId"],

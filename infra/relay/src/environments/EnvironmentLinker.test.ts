@@ -18,7 +18,6 @@ import * as EnvironmentCredentials from "./EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentLinker from "./EnvironmentLinker.ts";
-import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
 
 const relayKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
   privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -43,8 +42,6 @@ const config = RelayConfiguration.RelayConfiguration.of({
   clerkJwtAudience: "t3-code-relay",
   cloudMintPrivateKey: Redacted.make(relayKeyPair.privateKey),
   cloudMintPublicKey: relayKeyPair.publicKey,
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 });
 const isEnvironmentLinkProofInvalid = Schema.is(EnvironmentLinker.EnvironmentLinkProofInvalid);
 
@@ -53,6 +50,39 @@ function signTestJwt(payload: object, typ: string, privateKey: string): string {
   const encodedPayload = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const signingInput = `${header}.${encodedPayload}`;
   return `${signingInput}.${NodeCrypto.sign(null, Buffer.from(signingInput), privateKey).toString("base64url")}`;
+}
+
+function makeLinkProofPayload(overrides: {
+  readonly challenge: string;
+  readonly nowSeconds: number;
+  readonly expiresAtSeconds: number;
+  readonly endpoint?: RelayEnvironmentLinkProofPayload["endpoint"];
+}): RelayEnvironmentLinkProofPayload {
+  return {
+    iss: "t3-env:env-link-test",
+    aud: "https://relay.example.test",
+    sub: "env-link-test",
+    jti: "link-proof-jti",
+    iat: overrides.nowSeconds,
+    exp: overrides.expiresAtSeconds,
+    challenge: overrides.challenge,
+    environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
+    descriptor: {
+      environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
+      label: "Link Test Environment",
+      platform: { os: "darwin", arch: "arm64" },
+      serverVersion: "0.0.0-test",
+      capabilities: { repositoryIdentity: true },
+    },
+    environmentPublicKey: environmentKeyPair.publicKey.trim(),
+    endpoint: overrides.endpoint ?? {
+      httpBaseUrl: "https://env.example.test/",
+      wsBaseUrl: "wss://env.example.test/",
+      providerKind: "manual",
+    },
+    origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+    scopes: ["agent_activity_notifications"],
+  };
 }
 
 const makeRequest = Effect.gen(function* () {
@@ -64,43 +94,21 @@ const makeRequest = Effect.gen(function* () {
     request: {
       notificationsEnabled: true,
       liveActivitiesEnabled: true,
-      managedTunnelsEnabled: true,
     },
     jti: "challenge-jti",
     issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
     expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
   });
-  const payload = {
-    iss: "t3-env:env-link-test",
-    aud: "https://relay.example.test",
-    sub: "env-link-test",
-    jti: "link-proof-jti",
-    iat: Math.floor(now.epochMilliseconds / 1_000),
-    exp: Math.floor(expiresAt.epochMilliseconds / 1_000),
+  const payload = makeLinkProofPayload({
     challenge,
-    environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-    descriptor: {
-      environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-      label: "Link Test Environment",
-      platform: { os: "darwin", arch: "arm64" },
-      serverVersion: "0.0.0-test",
-      capabilities: { repositoryIdentity: true },
-    },
-    environmentPublicKey: environmentKeyPair.publicKey.trim(),
-    endpoint: {
-      httpBaseUrl: "https://env.example.test/",
-      wsBaseUrl: "wss://env.example.test/",
-      providerKind: "manual",
-    },
-    origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
-    scopes: ["agent_activity_notifications", "managed_tunnels"],
-  } satisfies RelayEnvironmentLinkProofPayload;
+    nowSeconds: Math.floor(now.epochMilliseconds / 1_000),
+    expiresAtSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
+  });
   return {
     request: {
       proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
       notificationsEnabled: true,
       liveActivitiesEnabled: true,
-      managedTunnelsEnabled: false,
     } satisfies RelayEnvironmentLinkRequest,
     payload,
   };
@@ -109,7 +117,6 @@ const makeRequest = Effect.gen(function* () {
 function testLayer(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
-  readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
 }) {
   return EnvironmentLinker.layer.pipe(
     Layer.provideMerge(RelayTokens.layer),
@@ -126,28 +133,10 @@ function testLayer(input?: {
           listUsersForEnvironment: () => Effect.succeed([]),
           listDeliveryUsersForEnvironment: () => Effect.succeed([]),
           listPublicKeysForEnvironment: () => Effect.succeed([]),
-          listForUser: () => Effect.succeed([]),
-          getForUser: () => Effect.succeed(null),
-          revokeForUser: () => Effect.succeed(false),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
           create: () => Effect.succeed("t3env_credential_secret"),
           authenticate: () => Effect.succeedNone,
-          revokeForEnvironmentPublicKey: () => Effect.succeed(false),
-        }),
-        Layer.succeed(ManagedEndpointProvider.ManagedEndpointProvider, {
-          prepareDeprovision: () => Effect.succeed(null),
-          deprovision: input?.deprovision ?? (() => Effect.void),
-          release: () => Effect.succeed(true),
-          provision: () =>
-            Effect.succeed({
-              endpoint: {
-                httpBaseUrl: "https://managed.example.test/",
-                wsBaseUrl: "wss://managed.example.test/ws",
-                providerKind: "cloudflare_tunnel",
-              },
-              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
-            }),
         }),
       ),
     ),
@@ -162,6 +151,7 @@ describe("EnvironmentLinker", () => {
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
       const result = yield* linker.link({ userId: "user_123", request });
       expect(result.environmentId).toBe(payload.environmentId);
+      expect(result.endpoint).toEqual(payload.endpoint);
       expect(result.environmentCredential).toBe("t3env_credential_secret");
       expect(persistedEnvironmentId).toBe(payload.environmentId);
     }).pipe(
@@ -176,73 +166,55 @@ describe("EnvironmentLinker", () => {
     );
   });
 
-  it.effect("links a publish-only environment with a non-secure nominal endpoint", () => {
-    let persistedEndpoint: string | null = null;
-    let deprovisionedEnvironmentId: string | null = null;
+  it.effect("rejects a link whose declared endpoint is not HTTPS/WSS", () => {
+    let persisted = false;
     return Effect.gen(function* () {
       const now = yield* DateTime.now;
       const expiresAt = DateTime.add(now, { minutes: 5 });
       const relayTokens = yield* RelayTokens.RelayTokens;
       const challenge = yield* relayTokens.issueLinkChallenge({
         userId: "user_123",
-        request: {
-          notificationsEnabled: true,
-          liveActivitiesEnabled: true,
-          managedTunnelsEnabled: false,
-        },
-        jti: "publish-only-challenge-jti",
+        request: { notificationsEnabled: true, liveActivitiesEnabled: true },
+        jti: "insecure-endpoint-challenge-jti",
         issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
         expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
       });
-      const payload = {
-        iss: "t3-env:env-link-test",
-        aud: "https://relay.example.test",
-        sub: "env-link-test",
-        jti: "publish-only-proof-jti",
-        iat: Math.floor(now.epochMilliseconds / 1_000),
-        exp: Math.floor(expiresAt.epochMilliseconds / 1_000),
+      const payload = makeLinkProofPayload({
         challenge,
-        environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-        descriptor: {
-          environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-          label: "Link Test Environment",
-          platform: { os: "darwin", arch: "arm64" },
-          serverVersion: "0.0.0-test",
-          capabilities: { repositoryIdentity: true },
-        },
-        environmentPublicKey: environmentKeyPair.publicKey.trim(),
+        nowSeconds: Math.floor(now.epochMilliseconds / 1_000),
+        expiresAtSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
         endpoint: {
           httpBaseUrl: "http://127.0.0.1:3773/",
           wsBaseUrl: "ws://127.0.0.1:3773/",
           providerKind: "manual",
         },
-        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
-        scopes: ["agent_activity_notifications"],
-      } satisfies RelayEnvironmentLinkProofPayload;
+      });
       const request = {
         proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
         notificationsEnabled: true,
         liveActivitiesEnabled: true,
-        managedTunnelsEnabled: false,
       } satisfies RelayEnvironmentLinkRequest;
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* linker.link({ userId: "user_123", request });
-      expect(result.environmentCredential).toBe("t3env_credential_secret");
-      expect(result.endpointRuntime).toBeNull();
-      expect(persistedEndpoint).toBe("http://127.0.0.1:3773/");
-      // Downgrading from a managed link must release the previously provisioned
-      // tunnel; nothing else cleans it up before a full unlink.
-      expect(deprovisionedEnvironmentId).toBe("env-link-test");
+      const result = yield* Effect.result(linker.link({ userId: "user_123", request }));
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);
+        if (isEnvironmentLinkProofInvalid(result.failure)) {
+          expect(result.failure).toMatchObject({
+            userId: "user_123",
+            environmentId: "env-link-test",
+            reason: "endpoint_not_secure",
+            stage: "validate_endpoint",
+          });
+        }
+      }
+      expect(persisted).toBe(false);
     }).pipe(
       Effect.provide(
         testLayer({
-          upsert: (input) =>
+          upsert: () =>
             Effect.sync(() => {
-              persistedEndpoint = input.endpoint.httpBaseUrl;
-            }),
-          deprovision: (input) =>
-            Effect.sync(() => {
-              deprovisionedEnvironmentId = input.environmentId;
+              persisted = true;
             }),
         }),
       ),

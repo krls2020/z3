@@ -1,5 +1,3 @@
-import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
 import * as Crypto from "effect/Crypto";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -23,6 +21,7 @@ import {
   type ApnsDeliveryJobPayload,
   type SignedApnsDeliveryJob,
 } from "./apnsDeliveryJobs.ts";
+import * as ApnsDeliveryJobs from "./ApnsDeliveryJobStore.ts";
 import * as RelayConfiguration from "../Config.ts";
 
 export class ApnsDeliveryQueueSendError extends Schema.TaggedErrorClass<ApnsDeliveryQueueSendError>()(
@@ -48,7 +47,7 @@ export class ApnsDeliveryQueueSender extends Context.Service<
   {
     readonly send: (
       body: SignedApnsDeliveryJob,
-    ) => Effect.Effect<void, Cloudflare.Queues.SendError>;
+    ) => Effect.Effect<void, ApnsDeliveryJobs.ApnsDeliveryJobPersistError>;
   }
 >()("t3code-relay/agentActivity/ApnsDeliveryQueue/ApnsDeliveryQueueSender") {}
 
@@ -208,20 +207,22 @@ export const make = Effect.gen(function* () {
 
 export const layer = Layer.effect(ApnsDeliveryQueue, make);
 
-export const layerCloudflareQueues = (
-  sender: Cloudflare.Queues.WriteQueueClient,
-  alchemyRuntimeContext: Alchemy.BaseRuntimeContext,
-) =>
-  layer.pipe(
-    Layer.provide(
-      Layer.succeed(
-        ApnsDeliveryQueueSender,
-        ApnsDeliveryQueueSender.of({
-          send: (body) =>
-            sender
-              .send(body)
-              .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
-        }),
-      ),
+/**
+ * Sends a signed job by inserting it into `ApnsDeliveryJobs` — committed
+ * before the caller's publish request is acknowledged, exactly like the
+ * Cloudflare queue send it replaces. Delivery itself happens out-of-band in
+ * `ApnsDeliveryWorker`'s lease loop.
+ */
+export const layerDbQueue = layer.pipe(
+  Layer.provide(
+    Layer.effect(
+      ApnsDeliveryQueueSender,
+      Effect.gen(function* () {
+        const jobs = yield* ApnsDeliveryJobs.ApnsDeliveryJobs;
+        return ApnsDeliveryQueueSender.of({
+          send: (body) => jobs.enqueue(body),
+        });
+      }),
     ),
-  );
+  ),
+);
