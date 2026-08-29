@@ -11,6 +11,7 @@
  * Set `SPI_UPDATE_GOLDENS=1` to (re)write every golden instead of
  * comparing — state the reason in the commit message.
  */
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
@@ -22,7 +23,7 @@ import { replayClaude } from "./claudeReplay.ts";
 import { replayCodex } from "./codexReplay.ts";
 import { recordCursorBaseline, recordGrokBaseline } from "./acpReplay.ts";
 import { recordOpenCodeBaseline } from "./openCodeReplay.ts";
-import { checkOrUpdateGolden, describeFirstDivergence } from "./goldenCheck.ts";
+import { checkOrUpdateGolden, describeFirstDivergence, expectedPathFor } from "./goldenCheck.ts";
 import { loadFixture } from "./loader.ts";
 import { redact } from "./redact.ts";
 
@@ -115,4 +116,70 @@ describe("SPI replay goldens", () => {
       timeoutMs,
     );
   }
+});
+
+interface McpToolCallItemCompleted {
+  readonly type: string;
+  readonly payload: {
+    readonly itemType?: string;
+    readonly data?: {
+      readonly toolName?: string;
+      readonly result?: {
+        readonly content?: ReadonlyArray<{ readonly text?: string }>;
+      };
+    };
+  };
+}
+
+/**
+ * Pins a content-level invariant of the checked-in golden itself (not just
+ * "replay still matches golden") — the fixture this golden comes from
+ * exists specifically to confirm both StateEnvelope wire carriers
+ * (docs/spec-z3.md §1) survive the Claude adapter's normalization. SPI-4's
+ * enrichment slice reads this exact item.completed/payload.data shape.
+ * Reads the checked-in file directly (not a fresh replay) so a
+ * SPI_UPDATE_GOLDENS regeneration that quietly loses the envelope content
+ * still fails here.
+ */
+describe("zerops-workflow-envelope golden content", () => {
+  it("carries the StateEnvelope on the wire for both zerops_workflow and zerops_mount", () => {
+    const goldenPath = expectedPathFor(
+      NodePath.join(fixturesRoot, "claude"),
+      "zerops-workflow-envelope",
+    );
+    const events = JSON.parse(
+      NodeFS.readFileSync(goldenPath, "utf8"),
+    ) as ReadonlyArray<McpToolCallItemCompleted>;
+
+    const toolResultText = (toolName: string): string => {
+      const event = events.find(
+        (candidate) =>
+          candidate.type === "item.completed" &&
+          candidate.payload.itemType === "mcp_tool_call" &&
+          candidate.payload.data?.toolName === toolName,
+      );
+      assert.isDefined(event, `expected an item.completed mcp_tool_call event for ${toolName}`);
+      const text = event?.payload.data?.result?.content?.[0]?.text;
+      assert.isDefined(text, `expected data.result.content[0].text for ${toolName}`);
+      return text as string;
+    };
+
+    // The fenced ```json zcp-envelope block carrier.
+    const workflowText = toolResultText("mcp__zerops__zerops_workflow");
+    const envelopeFenceCount = (workflowText.match(/zcp-envelope/g) ?? []).length;
+    assert.equal(
+      envelopeFenceCount,
+      1,
+      "zerops_workflow's tool result must carry exactly one fenced zcp-envelope block",
+    );
+
+    // The top-level "envelope" JSON key carrier.
+    const mountText = toolResultText("mcp__zerops__zerops_mount");
+    const mountParsed = JSON.parse(mountText) as Record<string, unknown>;
+    assert.property(
+      mountParsed,
+      "envelope",
+      "zerops_mount's tool result must be JSON with a top-level envelope key",
+    );
+  });
 });
