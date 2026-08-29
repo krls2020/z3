@@ -5152,6 +5152,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             })),
           ),
           watchDoorbell: () => Effect.never,
+          markAgentOAuth: () => Effect.die("markAgentOAuth is not used by ZeropsTopology"),
         },
       });
 
@@ -5222,6 +5223,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.andThen(Deferred.succeed(attached, undefined)),
               Effect.andThen(Deferred.await(running)),
             ),
+          markAgentOAuth: () => Effect.die("markAgentOAuth is not used by ZeropsTopology"),
         },
       });
 

@@ -60,6 +60,8 @@ const makeFakeCli = (
           yield* Deferred.succeed(watcherAttached, undefined);
           yield* Deferred.await(watcherRunning);
         }),
+      // Unused by ZeropsTopology — the agent-auth feed is the only caller.
+      markAgentOAuth: () => Effect.die("markAgentOAuth is not used by ZeropsTopology"),
     };
 
     const ringDoorbell = (type: string) =>
