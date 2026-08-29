@@ -29,6 +29,7 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { ZeropsLayerLive } from "./zerops/zeropsFeedsLayer.ts";
+import { ProviderRuntimeEventBusLive } from "./spi/ProviderRuntimeEventBus.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
@@ -441,13 +442,26 @@ const RuntimeBaseDependenciesLive = RuntimeCoreDependenciesLive.pipe(
 );
 
 /**
+ * `apps/server/src/zerops/**` depends on `ProviderRuntimeEventBus`
+ * (`spi/ProviderRuntimeEventBus.ts`), never on `ProviderService` directly —
+ * that is the SPI seam that keeps the Zerops feeds decoupled from
+ * `~/provider/**`. This composition root is where the bus's own
+ * `ProviderService` requirement is resolved, reusing `ProviderLayerLive`
+ * (memoized, so this does not construct a second provider runtime).
+ */
+const ProviderRuntimeEventBusLayerLive = ProviderRuntimeEventBusLive.pipe(
+  Layer.provide(ProviderLayerLive),
+);
+
+/**
  * The Zerops feeds READ from services the runtime already assembles — the
- * provider event bus and the sqlite store — so they sit on TOP of it rather
- * than beside it. Listed among the `provideMerge` calls above they would be
- * treated as a dependency OF the runtime, and their own requirements would leak
- * out to every caller instead of being satisfied.
+ * provider runtime event bus and the sqlite store — so they sit on TOP of it
+ * rather than beside it. Listed among the `provideMerge` calls above they
+ * would be treated as a dependency OF the runtime, and their own
+ * requirements would leak out to every caller instead of being satisfied.
  */
 const RuntimeDependenciesLive = ZeropsLayerLive.pipe(
+  Layer.provideMerge(ProviderRuntimeEventBusLayerLive),
   Layer.provideMerge(RuntimeBaseDependenciesLive),
 );
 

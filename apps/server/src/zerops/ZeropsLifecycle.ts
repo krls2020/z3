@@ -44,7 +44,7 @@ import {
   ZeropsThreadLifecycleRepository,
   type ZeropsThreadLifecycleRow,
 } from "../persistence/ZeropsThreadLifecycle.ts";
-import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ProviderRuntimeEventBus } from "../spi/ProviderRuntimeEventBus.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import { extractZeropsEnvelope } from "./zeropsEnvelope.ts";
 import { readZeropsToolCall } from "./zeropsToolResult.ts";
@@ -240,8 +240,8 @@ export const make = (options: ZeropsLifecycleOptions) =>
 export const layer = Layer.effect(
   ZeropsLifecycle,
   Effect.gen(function* () {
-    const provider = yield* ProviderService;
+    const bus = yield* ProviderRuntimeEventBus;
     const repository = yield* ZeropsThreadLifecycleRepository;
-    return yield* make({ toolEvents: provider.streamEvents, repository });
+    return yield* make({ toolEvents: bus.events, repository });
   }),
 );
