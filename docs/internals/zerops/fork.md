@@ -1,0 +1,138 @@
+# z3 fork rules
+
+z3 is a **hard fork** of [T3 Code](https://github.com/pingdotgg/t3code) (MIT). Upstream stops
+being a merge partner. What we still take from it, we take in two different ways (§3):
+**import** (byte-identical, for the wire-protocol packages) and **port** (re-applied behind our
+own interface, for the provider drivers). Everything else is ours.
+
+This supersedes the fork's earlier "stay additive so a rebase stays possible" rule — the one
+`README.md`/`AGENTS.md` carried before the freeze. Both are rewritten to match.
+
+## 1. Decision
+
+Measured against the real upstream repo, 2026-08-28:
+
+- Upstream moves at 117–197 commits/week; 126 commits / 580 paths in the 7 days before the
+  freeze alone, touching 37 of our 100 modified files. Provider work specifically: 85 commits in
+  60 days, all vendor-protocol tracking.
+- Provider work is **not self-contained**: 37 of those 85 commits (44%) also change
+  orchestration, contracts, client state or UI; the drivers import owned server modules
+  (`config`, `mcp`, `persistence`, `textGeneration`, telemetry,
+  `orchestration/ProjectionSnapshotQuery`); and our own lifecycle/topology feeds import
+  `ProviderService` directly. A "checkout the provider dir" import is a bespoke merge every time.
+- A full UI rewrite is planned; the server core already diverges (door, git executor, feeds, exec
+  RPC).
+- Rebase already failed once on our own merge history. A merge model would survive only until the
+  UI rewrite anyway.
+
+## 2. The freeze
+
+- Frozen at commit `f94a0d646ed78a4788e4af6417f74202a628a5e9` (`upstream/main`, 2026-08-28),
+  tagged `upstream-base-2026-08-28`. The fork's `main` branch is that commit's history renamed —
+  it was branch `z3` before the freeze.
+- From here on: no `git merge upstream/*`, no `git rebase upstream/main`.
+- Versioning is ours: `z3 v0.1.0` (in progress, §8 item 7). The npm name `t3` survives on the
+  container prefix until the release gate picks the bundle channel.
+
+## 3. Zones — the map, machine-checked
+
+| Zone | Paths | Rule |
+|---|---|---|
+| **Imported** (byte-identical) | `packages/effect-codex-app-server/**`, `packages/effect-acp/**` — the standalone wire-protocol packages; the list is final only once the freeze checklist (§8) proves each imports nothing owned | Never edited. Re-imported from an upstream SHA in one `import:` commit. Pinned by `imported.lock` (§3.1). |
+| **Ported** | `apps/server/src/provider/**` (drivers, adapters, model manifest, maintenance), `packages/contracts/src/provider*.ts`, `apps/server/src/codexModelOptions.ts` | Ours to compile, upstream's to author: upstream commits are **ported** (cherry-picked + adapted) behind the adapter SPI (§3.2). Our own edits stay minimal so ports stay cheap. |
+| **Owned core** | the rest of `apps/server`, `packages/{contracts,client-runtime,shared,ssh}`, `apps/desktop`, `apps/mobile` | Ours. Upstream changes here are optional cherry-picks chosen by triage (§6). |
+| **Owned product** | `apps/server/src/zerops/**`, `apps/web/src/zerops/**`, the new UI app (later), `docs/internals/zerops/**` | Ours only. |
+| **Removed** | per row in §4 | Deleted, not disabled. |
+
+### 3.1 Enforcement — `imported.lock`, not git history
+
+A checked-in `imported.lock`: for every imported path, the upstream commit SHA it came from and
+the git tree/blob OID it must have. CI recomputes the OIDs and fails on any difference; only the
+import step regenerates the lock. Commit subjects (`import:`) stay a convention, not the
+enforcement. No history inspection, nothing rots on a squash or rename.
+
+Alongside it, a zcp-style architecture test: ported code carries no `zerops` imports; owned
+product code reaches providers only through the SPI (§3.2) — today's direct `ProviderService`
+imports in the lifecycle/topology feeds are the first violation the test flags.
+
+### 3.2 The adapter SPI — the contract that makes porting safe
+
+Provider runtime events, persistence, orchestration, contracts and our Zerops reducers share
+source-level types today; a port that drops or reclassifies a lifecycle event compiles fine and
+breaks at runtime. Before any path is declared imported or ported, three things exist:
+
+- a **versioned normalized event schema** between drivers and everything else (orchestration, the
+  lifecycle reducer, persistence) — one file, semver'd, with a changelog;
+- **recorded fixtures**: real `claude -p --output-format stream-json` and `codex exec --json`
+  streams for the turns we depend on (tool call + result with envelope, user-input request,
+  compaction, error, sub-agent), replayed in tests against the SPI; a port that changes the
+  normalized output of a fixture fails the test, not the user;
+- a **compatibility matrix** row per port: ported upstream SHA × Claude CLI version × Codex CLI
+  version × Effect version, recorded in the ledger — the answer to "does this fork work with
+  today's CLIs".
+
+## 4. What goes, what stays
+
+| Item | What it is | Zerops path? | Decision |
+|---|---|---|---|
+| Desktop | same web bundle in Electron + local spawn, SSH launch, keychain, deep link, updater | yes (S5) | keep |
+| Mobile | Expo app on the shared client runtime | yes (S5) | keep |
+| T3 cloud — **reach/pairing** (`app.t3.codes` pairing, CLI token manager, boot service, managed endpoint) | how a phone / hosted web reaches a home server | replaced by the door (D1) | delete — the slice waits for S5 to prove mobile connects through the door first |
+| T3 cloud — **activity relay** (`AgentAwarenessRelay`, its `OrchestrationReactor` hook, `contracts/relay.ts`, client-runtime relay, mobile registration, `infra/relay`) | mobile push + Live Activities | mobile needs it; the relay must be ours to host | keep and host ourselves — the `infra/relay` deployment is an S5 deliverable |
+| Tailscale (39 files: `packages/tailscale`, `environment/RemoteOpenTargets.ts`, server lifecycle/config, CLI `pair`/`connect`, desktop exposure/settings/IPC, web settings, contracts) | an endpoint add-on to reach a t3 server on another machine **the user owns** over their private tailnet | none — z3's server lives in the Zerops container behind the public origin + door | delete as one refactor slice |
+| Local spawn (`t3 serve` on a laptop, desktop "local backend") | run the server on your own machine | none | delete — desktop keeps SSH launch/keychain/deep link/updater, loses the local backend |
+| Providers Cursor / Grok / OpenCode | drivers in the ported zone | not offered | keep the code (ports stay cheap when the tree matches upstream), hide via catalog config |
+| `apps/marketing` | the t3.codes website | none | delete |
+
+## 5. How work is done — the zcp loop, transplanted
+
+- **Homes**: design → `../../../../zcp/docs/spec-z3.md`; measured facts → the ledger
+  (`verified.md`, `questions.md`, `hacks.md`, `map.md`, dated, with the command; answered
+  questions leave `questions.md`); behaviour → tests; the map → this fork's `CLAUDE.md`/
+  `AGENTS.md` (never caches product knowledge). Plans are transient.
+- **Loop per change**: FRAME → PROVE (live on `z3-eval`) → SHAPE (plan + Codex second opinion) →
+  BUILD (one worktree per slice, RED → GREEN, Sonnet slices with self-contained briefs, atomic
+  commits, no trailers) → ASSEMBLE (targeted tests + typecheck + live smoke through the push loop
+  + owner retest pack) → LAND (spec + ledger updated, plan deleted).
+- **Verify minimally**: `vp test run <files>` + package typecheck; never the repo-wide suite.
+  Live = the push loop to `z3-eval`. Nothing is released before the release gate.
+- **Ledger discipline**: subagents report facts as text; one writer edits the ledger.
+
+## 6. Upstream intake — lean
+
+State kept: one `intake.md` (§ next to this file) with the **last-reviewed upstream SHA**, the
+decisions taken, and the open security candidates. No per-commit skip bookkeeping.
+
+Trigger: the drift watch (§7) or a monthly tick, whichever comes first. Steps (agent tasks):
+
+1. **Triage**: `git log <last-reviewed>..upstream/main` → three lists only: (a) provider commits
+   to port; (b) `fix`/security in auth, http, ws, uploads → cherry-pick candidates; (c) ideas for
+   the owner (the only list they read). Everything else is implicitly skipped by moving the SHA.
+2. **Import** the wire packages from the new SHA (one commit, lock regenerated).
+3. **Port** the provider commits behind the SPI: fixtures replayed, matrix row added, live canary
+   (§7) green on `z3-eval`. A port that needs an orchestration/contract change carries it in the
+   same slice with a spec note.
+4. **Cherry-picks** — each its own slice through the normal loop.
+5. Move the last-reviewed SHA.
+
+## 7. Adapter drift watch — parked
+
+A design for automatic upstream/vendor drift detection — an upstream-diff signal, a vendor-CLI
+release signal, and a live canary turn that re-records the raw event stream against the checked-in
+SPI fixtures, all landing as GitHub issues rather than silent breakage — is parked at
+`../../../../zcp/plans/backlog/z3-adapter-drift-watch.md`. It presupposes the adapter SPI and
+fixtures of §3.2 and a dedicated canary identity nobody has picked yet; promote it once the SPI
+lands, once a vendor-CLI break reaches a user before us, or once the first upstream port turns out
+to be more than a mechanical cherry-pick.
+
+## 8. Freeze checklist
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Tag `upstream-base-2026-08-28`; rename `z3` → `main`; ledger row | done |
+| 2 | Adapter SPI + fixtures (§3.2) — the largest item; recorded from `z3-eval` with the real CLIs; the lifecycle/topology feeds move behind it | open |
+| 3 | `imported.lock` + CI (lock check, changed-package tests, typecheck, architecture test) | open |
+| 4 | Deletions from §4 marked delete — one slice each (Tailscale is a refactor slice, not a `rm`) | open |
+| 5 | Mirrored model manifest | open |
+| 6 | Fork `CLAUDE.md` (the map) + this document + `intake.md` row 0 | open |
+| 7 | Versioning `z3 v0.1.0`; retire brief §4 rule 6; write `../../../../zcp/docs/spec-z3.md` §7 | open |
