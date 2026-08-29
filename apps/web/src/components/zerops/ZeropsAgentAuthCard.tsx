@@ -11,7 +11,7 @@
 import type { ZeropsAgentAuth, ZeropsAgentAuthSnapshot, ZeropsAgentId } from "@t3tools/contracts";
 
 import { Button } from "~/components/ui/button";
-import { agentAuthLabel } from "../../zerops/agentLogin";
+import { agentAuthAction, agentAuthLabel } from "../../zerops/agentLogin";
 
 const AGENT_NAMES: Record<ZeropsAgentId, string> = {
   "claude-code": "Claude Code",
@@ -59,21 +59,22 @@ function ZeropsAgentAuthRow({
     >
       <div className="flex min-w-0 flex-col">
         <span className="font-medium">{AGENT_NAMES[agent.agentId]}</span>
-        <span className="text-muted-foreground text-xs">{agentAuthLabel(agent.state)}</span>
+        <span className="text-muted-foreground text-xs">{agentAuthLabel(agent)}</span>
       </div>
-      <ZeropsAgentAuthAction agent={agent} onSignIn={onSignIn} />
+      <ZeropsAgentAuthActionButton agent={agent} onSignIn={onSignIn} />
     </div>
   );
 }
 
-function ZeropsAgentAuthAction({
+function ZeropsAgentAuthActionButton({
   agent,
   onSignIn,
 }: {
   readonly agent: ZeropsAgentAuth;
   readonly onSignIn: (agentId: ZeropsAgentId) => void;
 }) {
-  if (agent.state === "not-authorized" || agent.state === "reconnect") {
+  const action = agentAuthAction(agent);
+  if (action === "sign-in") {
     return (
       <Button
         onClick={() => {
@@ -86,12 +87,21 @@ function ZeropsAgentAuthAction({
       </Button>
     );
   }
-  if (agent.state === "local-only") {
+  if (action === "registering") {
     // The watcher marks this within seconds of the credential artifact
     // appearing — there is nothing for the user to click while it does.
     return (
       <Button disabled size="compact" variant="outline">
         Registering…
+      </Button>
+    );
+  }
+  if (action === "checking") {
+    // The live provider check hasn't answered yet — same idea as
+    // "registering", worded for what is actually pending.
+    return (
+      <Button disabled size="compact" variant="outline">
+        Checking…
       </Button>
     );
   }

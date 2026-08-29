@@ -19,8 +19,8 @@ import type {
   ScopedThreadRef,
   TerminalOpenInput,
   TerminalWriteInput,
+  ZeropsAgentAuth,
   ZeropsAgentAuthSnapshot,
-  ZeropsAgentAuthState,
   ZeropsAgentId,
 } from "@t3tools/contracts";
 
@@ -33,17 +33,88 @@ export function agentLoginCommand(agentId: ZeropsAgentId): string {
   return AGENT_LOGIN_COMMANDS[agentId];
 }
 
-/** Copy per state in welcome.js's five-value matrix — see `ZeropsAgentAuthState`. */
-const AGENT_AUTH_LABELS: Record<ZeropsAgentAuthState, string> = {
-  "not-authorized": "Not signed in",
-  "local-only": "Signed in on the container — registering with Zerops…",
-  reconnect: "Reconnect needed — sign in again",
-  authorized: "Authorized",
-  "authorized-token": "Authorized (token)",
-};
+type AgentAuthFields = Pick<ZeropsAgentAuth, "credPresent" | "providerAuth" | "state">;
 
-export function agentAuthLabel(state: ZeropsAgentAuthState): string {
-  return AGENT_AUTH_LABELS[state];
+/**
+ * The card's whole decision tree in one place: `agentAuthLabel` and
+ * `agentAuthAction` are two views onto the same classification, so a state
+ * can never get a label from one branch and a button from another.
+ *
+ * `state` (the local container/platform-flag matrix) and `providerAuth` (a
+ * live check against Claude/Codex's own account endpoint) can disagree — a
+ * credential file that is present but expired, revoked, or belongs to a
+ * signed-out account. `not-authorized` and `reconnect` have no credential to
+ * check, so `providerAuth` is ignored for them; for the three states that
+ * imply a credential is present (`authorized`, `authorized-token`,
+ * `local-only`), `providerAuth` wins over `state`.
+ */
+type AgentAuthPresentation =
+  | { readonly kind: "not-authorized" }
+  | { readonly kind: "reconnect" }
+  /** Credential present, but Claude/Codex itself no longer accepts it. */
+  | { readonly kind: "needs-reauth" }
+  /** Credential present; the live provider check hasn't answered yet. */
+  | { readonly kind: "checking" }
+  /** `local-only` with nothing contradicting it: the watcher will flip this within seconds. */
+  | { readonly kind: "registering" }
+  | { readonly kind: "authorized"; readonly token: boolean };
+
+function classifyAgentAuth(agent: AgentAuthFields): AgentAuthPresentation {
+  if (agent.state === "not-authorized") {
+    return { kind: "not-authorized" };
+  }
+  if (agent.state === "reconnect") {
+    return { kind: "reconnect" };
+  }
+  // From here, state is authorized | authorized-token | local-only — a
+  // credential is present locally, and providerAuth is meaningful.
+  if (agent.providerAuth === "unauthenticated") {
+    return { kind: "needs-reauth" };
+  }
+  if (agent.providerAuth === "unknown" && agent.credPresent) {
+    return { kind: "checking" };
+  }
+  if (agent.state === "local-only") {
+    return { kind: "registering" };
+  }
+  return { kind: "authorized", token: agent.state === "authorized-token" };
+}
+
+export function agentAuthLabel(agent: AgentAuthFields): string {
+  const presentation = classifyAgentAuth(agent);
+  switch (presentation.kind) {
+    case "not-authorized":
+      return "Not signed in";
+    case "reconnect":
+      return "Reconnect needed — sign in again";
+    case "needs-reauth":
+      return "Signed in on the container, but Claude/Codex reports not authenticated — sign in again";
+    case "checking":
+      return "Checking…";
+    case "registering":
+      return "Signed in on the container — registering with Zerops…";
+    case "authorized":
+      return presentation.token ? "Authorized (token)" : "Authorized";
+  }
+}
+
+/** What the row's action slot should render: an enabled sign-in button, a disabled placeholder, or nothing. */
+export type ZeropsAgentAuthAction = "sign-in" | "registering" | "checking" | "none";
+
+export function agentAuthAction(agent: AgentAuthFields): ZeropsAgentAuthAction {
+  const presentation = classifyAgentAuth(agent);
+  switch (presentation.kind) {
+    case "not-authorized":
+    case "reconnect":
+    case "needs-reauth":
+      return "sign-in";
+    case "checking":
+      return "checking";
+    case "registering":
+      return "registering";
+    case "authorized":
+      return "none";
+  }
 }
 
 /** Where the login terminal opens — the sshfs-mounted project root every z3 terminal defaults to. */
@@ -90,14 +161,14 @@ export function buildAgentLoginTerminalPlan(
 /**
  * Whether the card is worth showing at all: the feed has to be available
  * (this is a Zerops environment) and at least one agent has to need the
- * user's attention. `authorized` / `authorized-token` are the only states
- * that don't.
+ * user's attention. Only the fully-`authorized` classification (state says
+ * authorized AND the live provider check agrees) doesn't — notably, an
+ * agent whose `state` says `authorized*` but whose `providerAuth` disagrees
+ * still counts, or the user would never learn they need to re-auth.
  */
 export function zeropsAgentAuthNeedsAttention(snapshot: ZeropsAgentAuthSnapshot): boolean {
   return (
     snapshot.available &&
-    snapshot.agents.some(
-      (agent) => agent.state !== "authorized" && agent.state !== "authorized-token",
-    )
+    snapshot.agents.some((agent) => classifyAgentAuth(agent).kind !== "authorized")
   );
 }

@@ -57,6 +57,7 @@ const agentAuthSnapshot = (
       flagOAuth: false,
       flagToken: false,
       state: "not-authorized",
+      providerAuth: "unknown",
     },
   ],
   ...overrides,

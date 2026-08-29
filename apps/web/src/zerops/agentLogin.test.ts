@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { ScopedThreadRef, ZeropsAgentAuthSnapshot } from "@t3tools/contracts";
+import type { ScopedThreadRef, ZeropsAgentAuth, ZeropsAgentAuthSnapshot } from "@t3tools/contracts";
 import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import {
+  agentAuthAction,
   agentAuthLabel,
   agentLoginCommand,
   AGENT_LOGIN_COMMANDS,
@@ -33,15 +34,132 @@ describe("AGENT_LOGIN_COMMANDS / agentLoginCommand", () => {
   });
 });
 
-describe("agentAuthLabel", () => {
-  it("has one label per state in the matrix", () => {
-    expect(agentAuthLabel("not-authorized")).toBe("Not signed in");
-    expect(agentAuthLabel("local-only")).toBe(
-      "Signed in on the container — registering with Zerops…",
+const agent = (
+  overrides: Partial<ZeropsAgentAuth> & { agentId: "claude-code" | "codex" },
+): ZeropsAgentAuth => ({
+  credPresent: false,
+  flagOAuth: false,
+  flagToken: false,
+  state: "not-authorized",
+  providerAuth: "unknown",
+  ...overrides,
+});
+
+describe("agentAuthLabel / agentAuthAction", () => {
+  it("not-authorized: ignores providerAuth entirely", () => {
+    for (const providerAuth of ["authenticated", "unauthenticated", "unknown"] as const) {
+      const a = agent({ agentId: "claude-code", state: "not-authorized", providerAuth });
+      expect(agentAuthLabel(a)).toBe("Not signed in");
+      expect(agentAuthAction(a)).toBe("sign-in");
+    }
+  });
+
+  it("reconnect: ignores providerAuth entirely", () => {
+    for (const providerAuth of ["authenticated", "unauthenticated", "unknown"] as const) {
+      const a = agent({ agentId: "codex", state: "reconnect", providerAuth });
+      expect(agentAuthLabel(a)).toBe("Reconnect needed — sign in again");
+      expect(agentAuthAction(a)).toBe("sign-in");
+    }
+  });
+
+  it("authorized + provider authenticated: the plain success label, no action", () => {
+    const a = agent({
+      agentId: "claude-code",
+      state: "authorized",
+      credPresent: true,
+      providerAuth: "authenticated",
+    });
+    expect(agentAuthLabel(a)).toBe("Authorized");
+    expect(agentAuthAction(a)).toBe("none");
+  });
+
+  it("authorized-token + provider authenticated: the token-flavored success label, no action", () => {
+    const a = agent({
+      agentId: "codex",
+      state: "authorized-token",
+      credPresent: true,
+      providerAuth: "authenticated",
+    });
+    expect(agentAuthLabel(a)).toBe("Authorized (token)");
+    expect(agentAuthAction(a)).toBe("none");
+  });
+
+  it("local-only + provider authenticated: the default registering label, disabled action", () => {
+    const a = agent({
+      agentId: "claude-code",
+      state: "local-only",
+      credPresent: true,
+      providerAuth: "authenticated",
+    });
+    expect(agentAuthLabel(a)).toBe("Signed in on the container — registering with Zerops…");
+    expect(agentAuthAction(a)).toBe("registering");
+  });
+
+  /**
+   * The local state matrix (state) and the live provider check (providerAuth)
+   * can disagree — a credential file that is present but expired, revoked, or
+   * belongs to a signed-out account. providerAuth wins: this is still
+   * something the user must act on, from both `authorized*` and `local-only`.
+   */
+  it("authorized + provider unauthenticated: re-auth label, enabled sign-in", () => {
+    const a = agent({
+      agentId: "claude-code",
+      state: "authorized",
+      credPresent: true,
+      providerAuth: "unauthenticated",
+    });
+    expect(agentAuthLabel(a)).toBe(
+      "Signed in on the container, but Claude/Codex reports not authenticated — sign in again",
     );
-    expect(agentAuthLabel("reconnect")).toBe("Reconnect needed — sign in again");
-    expect(agentAuthLabel("authorized")).toBe("Authorized");
-    expect(agentAuthLabel("authorized-token")).toBe("Authorized (token)");
+    expect(agentAuthAction(a)).toBe("sign-in");
+  });
+
+  it("authorized-token + provider unauthenticated: re-auth label, enabled sign-in", () => {
+    const a = agent({
+      agentId: "codex",
+      state: "authorized-token",
+      credPresent: true,
+      providerAuth: "unauthenticated",
+    });
+    expect(agentAuthLabel(a)).toBe(
+      "Signed in on the container, but Claude/Codex reports not authenticated — sign in again",
+    );
+    expect(agentAuthAction(a)).toBe("sign-in");
+  });
+
+  it("local-only + provider unauthenticated: re-auth label, enabled sign-in", () => {
+    const a = agent({
+      agentId: "claude-code",
+      state: "local-only",
+      credPresent: true,
+      providerAuth: "unauthenticated",
+    });
+    expect(agentAuthLabel(a)).toBe(
+      "Signed in on the container, but Claude/Codex reports not authenticated — sign in again",
+    );
+    expect(agentAuthAction(a)).toBe("sign-in");
+  });
+
+  it("authorized + provider unknown, credential present: checking, disabled action", () => {
+    const a = agent({
+      agentId: "claude-code",
+      state: "authorized",
+      credPresent: true,
+      providerAuth: "unknown",
+    });
+    expect(agentAuthLabel(a)).toBe("Checking…");
+    expect(agentAuthAction(a)).toBe("checking");
+  });
+
+  it("local-only + provider unknown, credential present: checking, disabled action", () => {
+    const a = agent({
+      agentId: "codex",
+      state: "local-only",
+      credPresent: true,
+      providerAuth: "unknown",
+    });
+    expect(agentAuthLabel(a)).toBe("Checking…");
+    expect(agentAuthAction(a)).toBe("checking");
   });
 });
 
@@ -80,38 +198,33 @@ describe("buildAgentLoginTerminalPlan", () => {
   });
 });
 
-const agent = (
-  overrides: Partial<ZeropsAgentAuthSnapshot["agents"][number]> & {
-    agentId: "claude-code" | "codex";
-  },
-) => ({
-  credPresent: false,
-  flagOAuth: false,
-  flagToken: false,
-  state: "not-authorized" as const,
-  ...overrides,
-});
-
-const snapshot = (overrides?: Partial<ZeropsAgentAuthSnapshot>): ZeropsAgentAuthSnapshot => ({
+const snapshot = (agents: ReadonlyArray<ZeropsAgentAuth>): ZeropsAgentAuthSnapshot => ({
   available: true,
-  agents: [agent({ agentId: "claude-code" }), agent({ agentId: "codex" })],
-  ...overrides,
+  agents,
 });
 
 describe("zeropsAgentAuthNeedsAttention", () => {
   it("is false when the feed is not available", () => {
-    expect(zeropsAgentAuthNeedsAttention(snapshot({ available: false, agents: [] }))).toBe(false);
+    expect(zeropsAgentAuthNeedsAttention({ available: false, agents: [] })).toBe(false);
   });
 
-  it("is false when every agent is authorized", () => {
+  it("is false when every agent is authorized and the provider agrees", () => {
     expect(
       zeropsAgentAuthNeedsAttention(
-        snapshot({
-          agents: [
-            agent({ agentId: "claude-code", state: "authorized" }),
-            agent({ agentId: "codex", state: "authorized-token" }),
-          ],
-        }),
+        snapshot([
+          agent({
+            agentId: "claude-code",
+            state: "authorized",
+            credPresent: true,
+            providerAuth: "authenticated",
+          }),
+          agent({
+            agentId: "codex",
+            state: "authorized-token",
+            credPresent: true,
+            providerAuth: "authenticated",
+          }),
+        ]),
       ),
     ).toBe(false);
   });
@@ -119,12 +232,35 @@ describe("zeropsAgentAuthNeedsAttention", () => {
   it("is true when at least one agent is not authorized", () => {
     expect(
       zeropsAgentAuthNeedsAttention(
-        snapshot({
-          agents: [
-            agent({ agentId: "claude-code", state: "authorized" }),
-            agent({ agentId: "codex", state: "reconnect" }),
-          ],
-        }),
+        snapshot([
+          agent({
+            agentId: "claude-code",
+            state: "authorized",
+            credPresent: true,
+            providerAuth: "authenticated",
+          }),
+          agent({ agentId: "codex", state: "reconnect" }),
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * The case the addendum exists for: the local state matrix says
+   * "authorized", but the live provider check disagrees. That disagreement
+   * has to surface the card, or the user never learns they need to re-auth.
+   */
+  it("is true when the state matrix says authorized but the provider disagrees", () => {
+    expect(
+      zeropsAgentAuthNeedsAttention(
+        snapshot([
+          agent({
+            agentId: "claude-code",
+            state: "authorized",
+            credPresent: true,
+            providerAuth: "unauthenticated",
+          }),
+        ]),
       ),
     ).toBe(true);
   });

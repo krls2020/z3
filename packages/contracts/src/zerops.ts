@@ -323,6 +323,22 @@ export const ZeropsAgentAuthState = Schema.Literals([
 ]);
 export type ZeropsAgentAuthState = typeof ZeropsAgentAuthState.Type;
 
+/**
+ * A live check against the agent CLI's own provider account endpoint —
+ * independent of the local state matrix above. `state` says what the
+ * container's files and platform flag agree on; `providerAuth` says whether
+ * Claude/Codex itself still accepts the credential that implies. The two can
+ * disagree (a credential file that is present but expired, revoked, or
+ * belongs to a signed-out account), and when they do this wins over `state`
+ * for what the card shows.
+ */
+export const ZeropsProviderAuthState = Schema.Literals([
+  "authenticated",
+  "unauthenticated",
+  "unknown",
+]);
+export type ZeropsProviderAuthState = typeof ZeropsProviderAuthState.Type;
+
 export const ZeropsAgentAuth = Schema.Struct({
   agentId: ZeropsAgentId,
   /** Whether the credential artifact (`~/.claude/.credentials.json` etc.) exists. Presence-only — contents are never read. */
@@ -330,6 +346,7 @@ export const ZeropsAgentAuth = Schema.Struct({
   flagOAuth: Schema.Boolean,
   flagToken: Schema.Boolean,
   state: ZeropsAgentAuthState,
+  providerAuth: ZeropsProviderAuthState,
 });
 export type ZeropsAgentAuth = typeof ZeropsAgentAuth.Type;
 
