@@ -11,10 +11,12 @@
  * `classifyAgentAuth`'s own shape so a state can never get a label from one
  * branch and a button from another.
  */
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import type {
   ZeropsAgentAuth,
   ZeropsAgentAuthSnapshot,
   ZeropsAgentLoginState,
+  ZeropsAgentLoginStartResult,
 } from "@t3tools/contracts";
 
 type AgentAuthFields = Pick<ZeropsAgentAuth, "credPresent" | "providerAuth" | "state">;
@@ -164,6 +166,22 @@ export function agentLoginLabel(presentation: ZeropsAgentLoginPresentation): str
     case "failed":
       return presentation.message ?? "Sign-in failed";
   }
+}
+
+/**
+ * What terminal id, if any, the login terminal panel should now focus once
+ * `zerops.agentLogin.start` settles (S7 fix2 finding 3). A successful start
+ * returns the session's own `terminalId` — the terminal UI store's
+ * `ensureTerminal` needs exactly that to bring the login tab into view
+ * instead of leaving whatever was previously active in front (an empty
+ * shell, while the card says "Waiting for you to finish signing in"). A
+ * failed/interrupted start focuses nothing — the caller's own
+ * `useAtomCommand` already reports the failure.
+ */
+export function agentLoginTerminalToFocus(
+  result: AtomCommandResult<ZeropsAgentLoginStartResult, unknown>,
+): string | undefined {
+  return result._tag === "Success" ? result.value.terminalId : undefined;
 }
 
 /**

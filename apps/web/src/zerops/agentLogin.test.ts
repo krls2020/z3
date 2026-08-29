@@ -4,11 +4,13 @@ import type {
   ZeropsAgentAuthSnapshot,
   ZeropsAgentLoginState,
 } from "@t3tools/contracts";
+import { AsyncResult } from "effect/unstable/reactivity";
 
 import {
   agentAuthAction,
   agentAuthLabel,
   agentLoginLabel,
+  agentLoginTerminalToFocus,
   classifyAgentLogin,
   zeropsAgentAuthNeedsAttention,
 } from "./agentLogin";
@@ -201,6 +203,26 @@ describe("classifyAgentLogin / agentLoginLabel", () => {
     });
     expect(agentLoginLabel({ kind: "failed", message: "nope" })).toBe("nope");
     expect(agentLoginLabel({ kind: "failed", message: undefined })).toBe("Sign-in failed");
+  });
+});
+
+/**
+ * The pure half of the terminal-focus fix (S7 fix2 finding 3): the second
+ * login session's terminal tab opened unfocused, showing an empty shell
+ * while the card said "Waiting for you to finish signing in". Deriving
+ * "what terminal id should now be focused" from the `zerops.agentLogin.start`
+ * RPC result is the part `useAgentLogin.ts` (untested by convention) can
+ * delegate to something this file can pin.
+ */
+describe("agentLoginTerminalToFocus", () => {
+  it("a successful start focuses the session's own terminalId", () => {
+    const result = AsyncResult.success({ terminalId: "agent-login-claude-code" });
+    expect(agentLoginTerminalToFocus(result)).toBe("agent-login-claude-code");
+  });
+
+  it("a failed start focuses nothing", () => {
+    const result = AsyncResult.fail(new Error("boom"));
+    expect(agentLoginTerminalToFocus(result)).toBeUndefined();
   });
 });
 
