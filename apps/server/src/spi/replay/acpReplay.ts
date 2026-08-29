@@ -29,7 +29,7 @@ import {
   GrokSettings,
   ProviderDriverKind,
   ProviderInstanceId,
-  type ProviderRuntimeEvent,
+  type SpiEvent,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -66,7 +66,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
 /** Runs `adapter` through the fixed "hello" baseline and returns every event up to and including turn.completed. */
 function runBaseline<EStart, ESend, EStop>(
   adapter: {
-    readonly streamEvents: Stream.Stream<ProviderRuntimeEvent, never>;
+    readonly streamEvents: Stream.Stream<SpiEvent, never>;
     readonly startSession: (input: {
       readonly threadId: ThreadId;
       readonly provider: ReturnType<typeof ProviderDriverKind.make>;
@@ -87,9 +87,9 @@ function runBaseline<EStart, ESend, EStop>(
     readonly model: string;
     readonly turnInput: string;
   },
-): Effect.Effect<ReadonlyArray<ProviderRuntimeEvent>, EStart | ESend | EStop> {
+): Effect.Effect<ReadonlyArray<SpiEvent>, EStart | ESend | EStop> {
   return Effect.gen(function* () {
-    const events: Array<ProviderRuntimeEvent> = [];
+    const events: Array<SpiEvent> = [];
     const turnCompleted = yield* Deferred.make<void>();
 
     const collectorFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
@@ -135,7 +135,7 @@ function runBaseline<EStart, ESend, EStop>(
   });
 }
 
-export async function recordCursorBaseline(): Promise<ReadonlyArray<ProviderRuntimeEvent>> {
+export async function recordCursorBaseline(): Promise<ReadonlyArray<SpiEvent>> {
   const wrapperPath = await makeMockAgentWrapper();
   const cursorConfig = decodeCursorSettings({ binaryPath: wrapperPath });
 
@@ -152,7 +152,7 @@ export async function recordCursorBaseline(): Promise<ReadonlyArray<ProviderRunt
   return Effect.runPromise(Effect.scoped(program).pipe(Effect.provide(testLayer)));
 }
 
-export async function recordGrokBaseline(): Promise<ReadonlyArray<ProviderRuntimeEvent>> {
+export async function recordGrokBaseline(): Promise<ReadonlyArray<SpiEvent>> {
   const wrapperPath = await makeMockAgentWrapper();
   const grokConfig = decodeGrokSettings({ binaryPath: wrapperPath });
 

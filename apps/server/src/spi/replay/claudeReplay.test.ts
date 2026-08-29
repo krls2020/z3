@@ -12,13 +12,13 @@ const fixturesDir = NodePath.join(__dirname, "../fixtures/claude");
 
 describe("replayClaude", () => {
   it("drives canUseTool/AskUserQuestion through user-input.requested -> answer -> user-input.resolved, and the turn continues", async () => {
-    const fixture = loadFixture(fixturesDir, "ask-user-question");
+    // Real recording (SPI-3): apps/server/src/spi/recording/record-claude.mjs,
+    // captured on z3-eval/zcp with SDK 0.3.250 / CLI 2.1.251.
+    const fixture = loadFixture(fixturesDir, "user-input-requested");
 
     const events = await replayClaude(fixture);
     const types = events.map((event) => event.type);
 
-    // Session/thread bootstrap, then the message line's thread.started,
-    // then the control line's user-input lifecycle.
     assert.include(types, "session.started");
     assert.include(types, "session.configured");
     assert.include(types, "thread.started");
@@ -32,7 +32,7 @@ describe("replayClaude", () => {
       readonly requestId?: string;
       readonly payload: { readonly questions: ReadonlyArray<{ readonly question: string }> };
     };
-    assert.equal(requested.payload.questions[0]?.question, "Which framework?");
+    assert.equal(requested.payload.questions[0]?.question, "Which color do you prefer?");
     assert.isDefined(requested.requestId);
 
     const resolved = events[resolvedIndex] as {
@@ -40,6 +40,45 @@ describe("replayClaude", () => {
       readonly payload: { readonly answers: Record<string, string> };
     };
     assert.equal(resolved.requestId, requested.requestId);
-    assert.deepEqual(resolved.payload.answers, { "Which framework?": "React" });
+    assert.deepEqual(resolved.payload.answers, { "Which color do you prefer?": "Blue" });
+
+    // The turn continues after the answer: the recording's final
+    // assistant message is exactly "done", followed by a successful result.
+    assert.isAbove(
+      types.indexOf("turn.completed"),
+      resolvedIndex,
+      "turn.completed must follow user-input.resolved",
+    );
+  }, 20_000);
+
+  it("replays a plain text turn with no control lines", async () => {
+    const fixture = loadFixture(fixturesDir, "plain-text-turn");
+    const events = await replayClaude(fixture);
+    const types = events.map((event) => event.type);
+
+    assert.include(types, "thread.started");
+    assert.include(types, "turn.completed");
+    assert.notInclude(types, "user-input.requested");
+    assert.notInclude(types, "request.opened");
+  });
+
+  it("replays a turn with both StateEnvelope carriers and no control lines (MCP calls auto-approved)", async () => {
+    const fixture = loadFixture(fixturesDir, "zerops-workflow-envelope");
+    const events = await replayClaude(fixture);
+    const types = events.map((event) => event.type);
+
+    assert.include(types, "turn.completed");
+    assert.notInclude(types, "request.opened");
+  });
+
+  it("treats an interrupt() control line as a no-op and lets the following result message drive turn.completed(state:interrupted)", async () => {
+    const fixture = loadFixture(fixturesDir, "turn-abort-error");
+    const events = await replayClaude(fixture);
+
+    const turnCompleted = events.find((event) => event.type === "turn.completed") as
+      | { readonly payload: { readonly state: string } }
+      | undefined;
+    assert.isDefined(turnCompleted, "expected a turn.completed event");
+    assert.equal(turnCompleted?.payload.state, "interrupted");
   }, 20_000);
 });

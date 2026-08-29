@@ -19,12 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
-import {
-  OpenCodeSettings,
-  ProviderDriverKind,
-  type ProviderRuntimeEvent,
-  ThreadId,
-} from "@t3tools/contracts";
+import { OpenCodeSettings, ProviderDriverKind, type SpiEvent, ThreadId } from "@t3tools/contracts";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -146,7 +141,7 @@ const replayOpenCodeRuntime: OpenCodeRuntimeShape = {
  * event up to (and slightly past) `item.completed`, once the canned SSE
  * sequence above has fully played out.
  */
-export async function recordOpenCodeBaseline(): Promise<ReadonlyArray<ProviderRuntimeEvent>> {
+export async function recordOpenCodeBaseline(): Promise<ReadonlyArray<SpiEvent>> {
   const openCodeConfig = decodeOpenCodeSettings({
     binaryPath: "spi-replay-opencode",
     serverUrl: "http://127.0.0.1:9999",
@@ -155,7 +150,7 @@ export async function recordOpenCodeBaseline(): Promise<ReadonlyArray<ProviderRu
   const program = Effect.gen(function* () {
     const adapter = yield* makeOpenCodeAdapter(openCodeConfig);
 
-    const events: Array<ProviderRuntimeEvent> = [];
+    const events: Array<SpiEvent> = [];
     const itemCompleted = yield* Deferred.make<void>();
 
     const collectorFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>

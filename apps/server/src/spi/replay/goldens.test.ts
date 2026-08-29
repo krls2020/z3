@@ -15,7 +15,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 
-import type { ProviderRuntimeEvent } from "@t3tools/contracts";
+import type { SpiEvent } from "@t3tools/contracts";
 import { assert, describe, it } from "vite-plus/test";
 
 import { replayClaude } from "./claudeReplay.ts";
@@ -47,20 +47,32 @@ const REDACT_IDS = [
 interface GoldenCase {
   readonly driver: string;
   readonly name: string;
-  readonly record: () => Promise<ReadonlyArray<ProviderRuntimeEvent>>;
+  readonly record: () => Promise<ReadonlyArray<SpiEvent>>;
   readonly timeoutMs: number;
 }
 
 // Claude/Codex: replay a static JSONL wire fixture through the ported
 // adapter (see claudeReplay.ts / codexReplay.ts for the seam each uses).
+// The four Claude fixtures are real recordings (SPI-3,
+// apps/server/src/spi/recording/record-claude.mjs, SDK 0.3.250 / CLI
+// 2.1.251 / claude-opus-5[1m]); Codex's is the real
+// codexMultiAgentWire.json capture converted once to JSONL.
+const CLAUDE_FIXTURE_NAMES = [
+  "plain-text-turn",
+  "zerops-workflow-envelope",
+  "user-input-requested",
+  "turn-abort-error",
+] as const;
+
 const jsonlCases: ReadonlyArray<GoldenCase> = [
-  {
-    driver: "claude",
-    name: "ask-user-question",
-    record: () =>
-      replayClaude(loadFixture(NodePath.join(fixturesRoot, "claude"), "ask-user-question")),
-    timeoutMs: 20_000,
-  },
+  ...CLAUDE_FIXTURE_NAMES.map(
+    (name): GoldenCase => ({
+      driver: "claude",
+      name,
+      record: () => replayClaude(loadFixture(NodePath.join(fixturesRoot, "claude"), name)),
+      timeoutMs: 20_000,
+    }),
+  ),
   {
     driver: "codex",
     name: "multi-agent-wire",

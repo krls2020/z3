@@ -27,7 +27,7 @@ import {
   type ProviderApprovalDecision,
   ProviderDriverKind,
   type ProviderEvent,
-  type ProviderRuntimeEvent,
+  type SpiEvent,
   type ProviderSession,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
@@ -208,9 +208,9 @@ function wireNotificationToProviderEvent(
 /**
  * Runs a fixture's `message` lines (raw Codex wire notifications) through
  * the real adapter's mapping pipeline and returns every emitted
- * `ProviderRuntimeEvent`, in order.
+ * `SpiEvent`, in order.
  */
-export async function replayCodex(fixture: Fixture): Promise<ReadonlyArray<ProviderRuntimeEvent>> {
+export async function replayCodex(fixture: Fixture): Promise<ReadonlyArray<SpiEvent>> {
   const codexConfig = decodeCodexSettings({});
   const runtime = new ReplayCodexRuntime();
 
@@ -219,7 +219,7 @@ export async function replayCodex(fixture: Fixture): Promise<ReadonlyArray<Provi
       makeRuntime: () => Effect.succeed(runtime),
     });
 
-    const events: Array<ProviderRuntimeEvent> = [];
+    const events: Array<SpiEvent> = [];
     yield* Stream.runForEach(adapter.streamEvents, (event) =>
       Effect.sync(() => {
         events.push(event);

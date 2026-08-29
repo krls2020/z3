@@ -39,7 +39,7 @@ import {
   ApprovalRequestId,
   ClaudeSettings,
   ProviderDriverKind,
-  type ProviderRuntimeEvent,
+  type SpiEvent,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
@@ -114,13 +114,13 @@ class ReplayClaudeQuery implements AsyncIterable<SDKMessage> {
 
 /** Collects every emitted event and lets callers await the next one matching a predicate. */
 function makeEventCollector() {
-  const events: Array<ProviderRuntimeEvent> = [];
+  const events: Array<SpiEvent> = [];
   const waiters: Array<{
-    readonly predicate: (event: ProviderRuntimeEvent) => boolean;
-    readonly deferred: Deferred.Deferred<ProviderRuntimeEvent>;
+    readonly predicate: (event: SpiEvent) => boolean;
+    readonly deferred: Deferred.Deferred<SpiEvent>;
   }> = [];
 
-  const offer = (event: ProviderRuntimeEvent): Effect.Effect<void> => {
+  const offer = (event: SpiEvent): Effect.Effect<void> => {
     events.push(event);
     const matchIndex = waiters.findIndex((waiter) => waiter.predicate(event));
     if (matchIndex === -1) {
@@ -130,13 +130,11 @@ function makeEventCollector() {
     return Deferred.succeed(waiter!.deferred, event).pipe(Effect.asVoid);
   };
 
-  const waitFor = (
-    predicate: (event: ProviderRuntimeEvent) => boolean,
-  ): Effect.Effect<ProviderRuntimeEvent> =>
+  const waitFor = (predicate: (event: SpiEvent) => boolean): Effect.Effect<SpiEvent> =>
     Effect.gen(function* () {
       const existing = events.find(predicate);
       if (existing) return existing;
-      const deferred = yield* Deferred.make<ProviderRuntimeEvent>();
+      const deferred = yield* Deferred.make<SpiEvent>();
       waiters.push({ predicate, deferred });
       return yield* Deferred.await(deferred);
     });
@@ -144,21 +142,18 @@ function makeEventCollector() {
   return { events, offer, waitFor };
 }
 
-interface ClaudeUserInputAnswer {
-  readonly kind: "userInput";
-  readonly answers: Record<string, string>;
-}
-
-interface ClaudeApprovalAnswer {
-  readonly kind: "approval";
-  readonly decision: "accept" | "acceptForSession" | "decline" | "cancel";
+/** The `answer` shape apps/server/src/spi/recording/record-claude.mjs writes for a `canUseTool` control line: the literal `PermissionResult` its own `canUseTool` returned to the SDK. */
+interface RecordedCanUseToolAnswer {
+  readonly behavior: "allow" | "deny";
+  readonly updatedInput?: { readonly answers?: Record<string, string> };
+  readonly message?: string;
 }
 
 /**
  * Runs a fixture's message/control lines against a fresh Claude adapter
- * instance and returns every `ProviderRuntimeEvent` it emitted, in order.
+ * instance and returns every `SpiEvent` it emitted, in order.
  */
-export async function replayClaude(fixture: Fixture): Promise<ReadonlyArray<ProviderRuntimeEvent>> {
+export async function replayClaude(fixture: Fixture): Promise<ReadonlyArray<SpiEvent>> {
   const claudeConfig = decodeClaudeSettings({});
   const query = new ReplayClaudeQuery();
   let createInput:
@@ -196,10 +191,23 @@ export async function replayClaude(fixture: Fixture): Promise<ReadonlyArray<Prov
 
     const applyControlLine = (line: FixtureControlLine) =>
       Effect.gen(function* () {
+        if (line.name === "interrupt") {
+          // record-claude.mjs calls the raw SDK query's interrupt() directly
+          // (no adapter in its loop). The adapter itself never calls this —
+          // ClaudeAdapter's own interruptTurn hard-closes the query instead
+          // (see stopSessionInternal) — and its turn-abort handling reacts
+          // purely to the CONTENT of the subsequent user/result messages
+          // ("treats aborted_tools/user-aborted results as interrupted",
+          // ClaudeAdapter.test.ts), not to any interrupt-observed side
+          // channel. So replaying this line is a documented no-op — the
+          // following message lines carry the actual abort signal.
+          return;
+        }
+
         if (line.name !== "canUseTool") {
           return yield* Effect.die(
             new Error(
-              `replayClaude does not implement control line "${line.name}" yet (only "canUseTool" is proven) — see claudeReplay.ts`,
+              `replayClaude does not implement control line "${line.name}" yet (only "canUseTool"/"interrupt" are proven) — see claudeReplay.ts`,
             ),
           );
         }
@@ -211,11 +219,11 @@ export async function replayClaude(fixture: Fixture): Promise<ReadonlyArray<Prov
 
         const args = line.args as {
           readonly toolName: string;
-          readonly toolInput: Record<string, unknown>;
-          readonly toolUseID?: string;
+          readonly input: Record<string, unknown>;
+          readonly toolUseID?: string | null;
         };
 
-        const resultPromise = canUseTool(args.toolName, args.toolInput, {
+        const resultPromise = canUseTool(args.toolName, args.input, {
           signal: new AbortController().signal,
           toolUseID: args.toolUseID ?? "spi-replay-tool-use",
         });
@@ -224,31 +232,27 @@ export async function replayClaude(fixture: Fixture): Promise<ReadonlyArray<Prov
           (event) => event.type === "user-input.requested" || event.type === "request.opened",
         );
 
+        const answer = line.answer as RecordedCanUseToolAnswer;
+
         if (requested.type === "user-input.requested") {
-          const answer = line.answer as ClaudeUserInputAnswer;
-          if (answer.kind !== "userInput") {
+          const answers = answer.updatedInput?.answers;
+          if (!answers) {
             return yield* Effect.die(
               new Error(
-                'fixture answer.kind must be "userInput" to resolve a user-input.requested event',
+                "fixture canUseTool answer for a user-input.requested event must carry updatedInput.answers",
               ),
             );
           }
           yield* adapter.respondToUserInput(
             REPLAY_THREAD_ID,
             ApprovalRequestId.make(String(requested.requestId)),
-            answer.answers,
+            answers,
           );
         } else {
-          const answer = line.answer as ClaudeApprovalAnswer;
-          if (answer.kind !== "approval") {
-            return yield* Effect.die(
-              new Error('fixture answer.kind must be "approval" to resolve a request.opened event'),
-            );
-          }
           yield* adapter.respondToRequest(
             REPLAY_THREAD_ID,
             ApprovalRequestId.make(String(requested.requestId)),
-            answer.decision,
+            answer.behavior === "allow" ? "accept" : "decline",
           );
         }
 
