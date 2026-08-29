@@ -323,12 +323,12 @@ export function isSupportedLinkProviderKind(request: RelayLinkProofRequest): boo
   );
 }
 
-export function linkProofScopes(
-  request: RelayLinkProofRequest,
-): RelayEnvironmentLinkProofPayload["scopes"] {
-  return request.endpoint.providerKind === "cloudflare_tunnel"
-    ? ["agent_activity_notifications", "managed_tunnels"]
-    : ["agent_activity_notifications"];
+// The relay's RelayEnvironmentLinkScope shrank to this single scope once
+// managed-tunnel provisioning left the relay (every environment now reaches
+// it over its own public origin) — there is no longer a scope distinction by
+// provider kind.
+export function linkProofScopes(): RelayEnvironmentLinkProofPayload["scopes"] {
+  return ["agent_activity_notifications"];
 }
 
 function hasExactScope(input: {
@@ -336,6 +336,64 @@ function hasExactScope(input: {
   readonly expected: string;
 }): boolean {
   return input.scopes.length === 1 && input.scopes[0] === input.expected;
+}
+
+/** The `Origin` header, or an origin reconstructed from `X-Forwarded-*`/`Host`. */
+function requestOriginHeader(request: HttpServerRequest.HttpServerRequest): string | undefined {
+  const origin = firstForwardedHeaderValue(request.headers.origin);
+  if (origin !== undefined) {
+    return origin;
+  }
+  const proto = firstForwardedHeaderValue(request.headers["x-forwarded-proto"]) ?? "https";
+  const host =
+    firstForwardedHeaderValue(request.headers["x-forwarded-host"]) ??
+    firstForwardedHeaderValue(request.headers.host);
+  return host !== undefined ? `${proto}://${host}` : undefined;
+}
+
+/**
+ * The container's own public origin, stamped into the environment-link proof
+ * as `endpointOrigin` (`RelayEnvironmentLinkProofPayload`) so the relay can
+ * verify it belongs to a real subdomain-enabled service of the claimed
+ * Zerops project (`ZeropsProjectBinding` on the relay side).
+ *
+ * Order: an explicit `T3CODE_ZEROPS_PUBLIC_ORIGIN` override
+ * (`zerops.publicOrigin`); otherwise `requestOrigin`, which each caller
+ * derives its own way — `cloudLinkProofHandler` reads the linking browser's
+ * actual `Origin`/`X-Forwarded-*`/`Host` headers via `requestOriginHeader`,
+ * while the CLI reconcile loop (no inbound request to read) passes the local
+ * origin it was started with. Always validated `https://` and never
+ * loopback — a Zerops-hosted container is never reached over `127.0.0.1`.
+ */
+export function resolveZeropsLinkProofOrigin(input: {
+  readonly publicOrigin: string | undefined;
+  readonly requestOrigin: string | undefined;
+}): Effect.Effect<string, EnvironmentHttpBadRequestError> {
+  const candidate = input.publicOrigin ?? input.requestOrigin;
+  if (candidate === undefined) {
+    return Effect.fail(
+      new EnvironmentHttpBadRequestError({
+        message: "Could not determine this environment's public origin.",
+      }),
+    );
+  }
+  return Effect.try({
+    try: () => new URL(candidate),
+    catch: () =>
+      new EnvironmentHttpBadRequestError({
+        message: "Could not determine this environment's public origin.",
+      }),
+  }).pipe(
+    Effect.flatMap((url) =>
+      url.protocol === "https:" && !isLoopbackHostname(url.hostname)
+        ? Effect.succeed(url.origin)
+        : Effect.fail(
+            new EnvironmentHttpBadRequestError({
+              message: "This environment's public origin must be a secure, non-loopback origin.",
+            }),
+          ),
+    ),
+  );
 }
 
 function hasBoundedCloudProofLifetime(input: {
@@ -356,6 +414,7 @@ const decodeCloudMintProof = Schema.decodeUnknownEffect(RelayCloudMintCredential
 interface CloudHttpDependencies {
   readonly secrets: ServerSecretStore.ServerSecretStore["Service"];
   readonly environment: ServerEnvironment.ServerEnvironment["Service"];
+  readonly config: ServerConfig.ServerConfig["Service"];
   readonly endpointRuntime: ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"];
   readonly environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"];
   readonly cliTokenManager: CliTokenManager.CloudCliTokenManager["Service"];
@@ -366,6 +425,7 @@ const cloudHttpDependencies = Effect.gen(function* () {
   return {
     secrets: yield* ServerSecretStore.ServerSecretStore,
     environment: yield* ServerEnvironment.ServerEnvironment,
+    config: yield* ServerConfig.ServerConfig,
     endpointRuntime: yield* ManagedEndpointRuntime.CloudManagedEndpointRuntime,
     environmentAuth: yield* EnvironmentAuth.EnvironmentAuth,
     cliTokenManager: yield* CliTokenManager.CloudCliTokenManager,
@@ -373,10 +433,11 @@ const cloudHttpDependencies = Effect.gen(function* () {
   } satisfies CloudHttpDependencies;
 });
 
-const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function* (
+export const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function* (
   dependencies: CloudHttpDependencies,
   request: RelayLinkProofRequest,
   requestUrl: string,
+  endpointOrigin: string,
 ) {
   const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(dependencies.secrets);
   if (
@@ -388,6 +449,16 @@ const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function
   ) {
     return yield* new EnvironmentHttpBadRequestError({
       message: "Invalid managed endpoint origin.",
+    });
+  }
+  // Every environment-link proof is now project-bound (the relay's
+  // ZeropsProjectBinding verifies it): an environment that is not running on
+  // Zerops has no project to attest, so it cannot produce a valid proof.
+  const zerops = dependencies.config.zerops;
+  if (zerops === undefined) {
+    return yield* new EnvironmentHttpBadRequestError({
+      message:
+        "This environment is not running on Zerops; no environment link proof can be issued.",
     });
   }
   const now = yield* DateTime.now;
@@ -407,7 +478,9 @@ const makeCloudLinkProof = Effect.fn("environment.cloud.makeLinkProof")(function
     environmentPublicKey: normalizePemForSignedPayload(keyPair.publicKey),
     endpoint: request.endpoint,
     origin: request.origin,
-    scopes: linkProofScopes(request),
+    scopes: linkProofScopes(),
+    zeropsProjectId: zerops.projectId,
+    endpointOrigin,
   } satisfies RelayEnvironmentLinkProofPayload;
   return yield* signRelayJwt({
     privateKey: keyPair.privateKey,
@@ -433,7 +506,18 @@ const cloudLinkProofHandler = Effect.fn("environment.cloud.linkProof")(
         message: "Invalid managed endpoint origin.",
       });
     }
-    const proof = yield* makeCloudLinkProof(dependencies, request, requestUrl);
+    const zerops = dependencies.config.zerops;
+    if (zerops === undefined) {
+      return yield* new EnvironmentHttpBadRequestError({
+        message:
+          "This environment is not running on Zerops; no environment link proof can be issued.",
+      });
+    }
+    const endpointOrigin = yield* resolveZeropsLinkProofOrigin({
+      publicOrigin: zerops.publicOrigin,
+      requestOrigin: requestOriginHeader(httpRequest),
+    });
+    const proof = yield* makeCloudLinkProof(dependencies, request, requestUrl, endpointOrigin);
     yield* appendCloudCredentialResponseHeaders;
     return proof satisfies RelayEnvironmentLinkProof;
   },
@@ -565,6 +649,16 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
         }),
       ),
     );
+    // Same rule as the HTTP-triggered handshake (cloudLinkProofHandler): every
+    // link proof is now project-bound, so this environment must be running on
+    // Zerops before it is worth asking the relay for a challenge at all.
+    const zerops = dependencies.config.zerops;
+    if (zerops === undefined) {
+      return yield* new EnvironmentHttpBadRequestError({
+        message:
+          "This environment is not running on Zerops; no environment link proof can be issued.",
+      });
+    }
     const mode = yield* readCliDesiredLinkMode;
     const managedTunnelsEnabled = mode !== "publish_only";
     const relayUrl = yield* requireRelayUrl;
@@ -577,6 +671,10 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
         managedTunnelsEnabled,
       },
       schema: RelayEnvironmentLinkChallengeResponse,
+    });
+    const endpointOrigin = yield* resolveZeropsLinkProofOrigin({
+      publicOrigin: zerops.publicOrigin,
+      requestOrigin: localOrigin,
     });
     const proof = yield* makeCloudLinkProof(
       dependencies,
@@ -594,6 +692,7 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
         },
       },
       localOrigin,
+      endpointOrigin,
     );
     const link = yield* relayClientRequest(dependencies, {
       url: `${relayUrl}/v1/client/environment-links`,
@@ -607,13 +706,16 @@ const reconcileDesiredCloudLinkWith = Effect.fn("environment.cloud.reconcileDesi
       schema: RelayEnvironmentLinkResponse,
     });
     yield* setCliDesiredCloudLink(true, mode);
+    // The relay no longer provisions managed tunnels (every environment
+    // reaches it over its own public origin), so a link response no longer
+    // carries an endpoint runtime to apply.
     return yield* applyCloudRelayConfig(dependencies, {
       relayUrl,
       relayIssuer: link.relayIssuer,
       cloudUserId: link.cloudUserId,
       environmentCredential: link.environmentCredential,
       cloudMintPublicKey: link.cloudMintPublicKey,
-      endpointRuntime: link.endpointRuntime,
+      endpointRuntime: null,
     });
   },
   Effect.catchIf(

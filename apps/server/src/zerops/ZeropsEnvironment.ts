@@ -48,6 +48,14 @@ export interface ZeropsEnvironment {
   readonly allowedOrigins: ReadonlyArray<string>;
   /** See {@link DEFAULT_ZEROPS_MEMBERSHIP_TTL_SECONDS}. */
   readonly membershipTtl: Duration.Duration;
+  /**
+   * An explicit override for this container's own public origin (e.g.
+   * `https://zcp-26a7-8080.prg1.zerops.app`), set via `T3CODE_ZEROPS_PUBLIC_ORIGIN`.
+   * Undefined unless an operator configured it; the relay environment-link
+   * proof falls back to deriving the origin from the linking request when
+   * this is absent (`cloud/http.ts`'s `resolveZeropsLinkProofOrigin`).
+   */
+  readonly publicOrigin: string | undefined;
 }
 
 /** Raw environment values, before the rule is applied. */
@@ -56,6 +64,7 @@ export interface ZeropsEnvironmentInput {
   readonly apiHost: string | undefined;
   readonly allowedOrigins: ReadonlyArray<string>;
   readonly membershipTtlSeconds: number | undefined;
+  readonly publicOrigin?: string | undefined;
 }
 
 /**
@@ -91,11 +100,13 @@ export const resolveZeropsEnvironment = (
     input.membershipTtlSeconds > 0
       ? input.membershipTtlSeconds
       : DEFAULT_ZEROPS_MEMBERSHIP_TTL_SECONDS;
+  const publicOrigin = input.publicOrigin?.trim();
   return {
     projectId,
     apiBaseUrl: resolveZeropsApiBaseUrl(input.apiHost),
     allowedOrigins: input.allowedOrigins,
     membershipTtl: Duration.seconds(membershipTtlSeconds),
+    publicOrigin: publicOrigin && publicOrigin.length > 0 ? publicOrigin : undefined,
   };
 };
 

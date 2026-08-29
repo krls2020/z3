@@ -150,6 +150,13 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  // Explicit override for this container's own public origin, consulted by
+  // the environment-link proof before falling back to the linking request's
+  // Origin/Host (see ZeropsEnvironment.publicOrigin).
+  zeropsPublicOrigin: Config.string("T3CODE_ZEROPS_PUBLIC_ORIGIN").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   noBrowser: Config.boolean("T3CODE_NO_BROWSER").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -430,6 +437,7 @@ export const resolveServerConfig = (
         apiHost: env.zeropsApiHost,
         allowedOrigins: env.zeropsAllowedOrigins,
         membershipTtlSeconds: env.zeropsMembershipTtlSeconds,
+        publicOrigin: env.zeropsPublicOrigin,
       }),
       noBrowser,
       startupPresentation,
