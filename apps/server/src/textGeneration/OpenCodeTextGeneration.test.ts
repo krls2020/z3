@@ -10,7 +10,10 @@ import * as NetService from "@t3tools/shared/Net";
 import { beforeEach, expect } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
-import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
+import {
+  OpenCodeRuntimeCapabilityTest,
+  type OpenCodeRuntimeCapability,
+} from "../spi/openCodeRuntime.ts";
 import * as OpenCodeTextGeneration from "./OpenCodeTextGeneration.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 
@@ -41,7 +44,7 @@ const runtimeMock = {
   },
 };
 
-const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntimeShape = {
+const OpenCodeRuntimeTestDouble: OpenCodeRuntimeCapability = {
   startOpenCodeServerProcess: ({ binaryPath }) =>
     Effect.gen(function* () {
       const index = runtimeMock.state.startCalls.length + 1;
@@ -59,13 +62,6 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntimeShape = {
         exitCode: Effect.never,
       };
     }),
-  connectToOpenCodeServer: ({ serverUrl }) =>
-    Effect.succeed({
-      url: serverUrl ?? "http://127.0.0.1:4301",
-      exitCode: null,
-      external: Boolean(serverUrl),
-    }),
-  runOpenCodeCommand: () => Effect.succeed({ stdout: "", stderr: "", code: 0 }),
   createOpenCodeSdkClient: ({ baseUrl, serverPassword }) =>
     ({
       session: {
@@ -101,23 +97,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntimeShape = {
           );
         },
       },
-    }) as unknown as ReturnType<OpenCodeRuntime.OpenCodeRuntimeShape["createOpenCodeSdkClient"]>,
-  loadOpenCodeInventory: () =>
-    Effect.fail(
-      new OpenCodeRuntime.OpenCodeRuntimeError({
-        operation: "loadOpenCodeInventory",
-        detail: "OpenCodeRuntimeTestDouble.loadOpenCodeInventory not used in this test",
-        cause: null,
-      }),
-    ),
-  loadInventoryFromCli: () =>
-    Effect.fail(
-      new OpenCodeRuntime.OpenCodeRuntimeError({
-        operation: "loadInventoryFromCli",
-        detail: "OpenCodeRuntimeTestDouble.loadInventoryFromCli not used in this test",
-        cause: null,
-      }),
-    ),
+    }) as unknown as ReturnType<OpenCodeRuntimeCapability["createOpenCodeSdkClient"]>,
 };
 
 const DEFAULT_TEST_MODEL_SELECTION = {
@@ -134,8 +114,7 @@ const DEFAULT_COMMIT_MESSAGE_INPUT = {
 
 const OPENCODE_TEXT_GENERATION_IDLE_TTL_MS = 30_000;
 
-const OpenCodeTextGenerationTestLayer = Layer.succeed(
-  OpenCodeRuntime.OpenCodeRuntime,
+const OpenCodeTextGenerationTestLayer = OpenCodeRuntimeCapabilityTest.make(
   OpenCodeRuntimeTestDouble,
 ).pipe(
   Layer.provideMerge(
@@ -147,8 +126,7 @@ const OpenCodeTextGenerationTestLayer = Layer.succeed(
   Layer.provideMerge(NodeServices.layer),
 );
 
-const OpenCodeTextGenerationExistingServerTestLayer = Layer.succeed(
-  OpenCodeRuntime.OpenCodeRuntime,
+const OpenCodeTextGenerationExistingServerTestLayer = OpenCodeRuntimeCapabilityTest.make(
   OpenCodeRuntimeTestDouble,
 ).pipe(
   Layer.provideMerge(

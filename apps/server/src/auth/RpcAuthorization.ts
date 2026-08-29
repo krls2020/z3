@@ -99,6 +99,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.subscribeZeropsTopology]: AuthOrchestrationReadScope,
   [WS_METHODS.zeropsLifecycleGet]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeZeropsLifecycle]: AuthOrchestrationReadScope,
+  [WS_METHODS.subscribeZeropsAgentAuth]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsRefreshStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsPull]: AuthOrchestrationOperateScope,
   [WS_METHODS.gitRunStackedAction]: AuthOrchestrationOperateScope,

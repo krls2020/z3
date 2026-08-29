@@ -37,8 +37,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { ServerConfig } from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { resolveClaudeHomePath } from "../provider/Drivers/ClaudeHome.ts";
-import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
+import { claudeHomePath, codexHomeLayout } from "../spi/driverHomes.ts";
 import { UsageAggregator } from "./usageAggregation.ts";
 import { parseRateTable, type RateTable } from "./usagePricing.ts";
 import {
@@ -218,9 +217,9 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-    const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
+    const claudeHome = yield* claudeHomePath(settings.providers.claudeAgent);
     const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
-    const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
+    const codexLayout = yield* codexHomeLayout(settings.providers.codex);
     // Grok Settings only expose the binary path; home is `$GROK_HOME` or `~/.grok`.
     // Empty/whitespace GROK_HOME must fall back: coalescing alone would scan cwd.
     const grokHomeEnv = hostEnvironment["GROK_HOME"]?.trim() ?? "";

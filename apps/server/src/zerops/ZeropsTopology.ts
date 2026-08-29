@@ -31,10 +31,10 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
-import type { ProviderRuntimeEvent, ZeropsTopologySnapshot } from "@t3tools/contracts";
+import type { SpiEvent, ZeropsTopologySnapshot } from "@t3tools/contracts";
 
 import { ServerConfig } from "../config.ts";
-import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ProviderRuntimeEventBus } from "../spi/ProviderRuntimeEventBus.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import * as ZeropsCliModule from "./ZeropsCli.ts";
 import { isZeropsEnvironment } from "./ZeropsEnvironment.ts";
@@ -111,7 +111,7 @@ const contentSignature = (snapshot: ZeropsTopologySnapshot): string =>
 export interface ZeropsTopologyOptions {
   readonly cli: ZeropsCli["Service"];
   /** The provider runtime bus, for the post-tool nudge. */
-  readonly toolEvents: Stream.Stream<ProviderRuntimeEvent>;
+  readonly toolEvents: Stream.Stream<SpiEvent>;
   /**
    * Whether this server runs inside a Zerops project. False switches the feed
    * off before it touches anything: on a laptop running T3 there is no project
@@ -302,8 +302,7 @@ export const make = (options: ZeropsTopologyOptions) =>
 
     const nudgeLoop = toolEvents.pipe(
       Stream.filter(
-        (event) =>
-          event.type === "item.completed" && readZeropsToolCall(event.payload) !== undefined,
+        (event) => event.type === "item.completed" && readZeropsToolCall(event) !== undefined,
       ),
       Stream.runForEach(() => nudge),
       Effect.catchCause(() => Effect.void),
@@ -329,11 +328,11 @@ export const layer = Layer.effect(
   ZeropsTopology,
   Effect.gen(function* () {
     const cli = yield* ZeropsCli;
-    const provider = yield* ProviderService;
+    const bus = yield* ProviderRuntimeEventBus;
     const config = yield* ServerConfig;
     return yield* make({
       cli,
-      toolEvents: provider.streamEvents,
+      toolEvents: bus.events,
       // The one rule, owned by ZeropsEnvironment: `T3CODE_ZEROPS_PROJECT_ID`
       // set and non-empty. Nothing here re-derives it.
       isZeropsEnvironment: isZeropsEnvironment(config),

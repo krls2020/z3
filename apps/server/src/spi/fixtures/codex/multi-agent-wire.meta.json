@@ -1,0 +1,7 @@
+{
+  "driver": "codex",
+  "cliVersion": "codex-cli 0.145.0",
+  "model": "gpt-5.6-luna",
+  "notes": "Converted once from apps/server/src/provider/testFixtures/codexMultiAgentWire.json (that file stays untouched \u2014 upstream CodexCollabWire.test.ts / CodexCollabRuntime.integration.test.ts keep consuming it directly). rootThreadId=019fcfd6-17bb-72f0-ae12-a1f2dee6e3e5, childThreadIds=019fcfd6-2883-77e0-9013-4410ede70371,019fcfd6-2ef7-7932-9ff5-dea6ad6f4daf. Each of the 21 real captured notifications is fed to the ported mapToRuntimeEvents mapper individually (via the FakeCodexRuntime/makeRuntime seam), addressed at its own wire threadId \u2014 this pins the mapper's per-notification-shape behavior faithfully, but does NOT replay CodexSessionRuntime's child-registration/collabAgent synthesis step (already covered by CodexCollabWire.test.ts / CodexCollabRuntime.integration.test.ts), so none of these 21 notifications produce collabAgent/* synthetic events here.",
+  "synthetic": false
+}

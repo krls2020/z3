@@ -2,7 +2,7 @@
 
 > For maintainers. Using T3 Code? See [docs/user](../user/).
 
-Remote environments are shipped, not planned. Direct, bearer-paired, relay-tunneled, Tailscale, and
+Remote environments are shipped, not planned. Direct, bearer-paired, relay-tunneled, and
 desktop-managed SSH access all exist today. This document describes the model they share and where
 each piece lives. For the user-facing setup guide see
 [remote access](../user/remote-access.md).
@@ -22,7 +22,7 @@ the connection layer, never by splitting the runtime.
 ┌───────────────▼──────────────────────────────┐
 │ Access method                                │
 │  direct ws/wss, relay tunnel,                │
-│  Tailscale serve, desktop-managed ssh        │
+│  desktop-managed ssh                         │
 └───────────────┬──────────────────────────────┘
                 │ connects to one T3 server
 ┌───────────────▼──────────────────────────────┐
@@ -57,11 +57,10 @@ control plane or a copy of session state.
 | `RelayConnectionTarget`   | Managed T3 Connect relay tunnels.                                        |
 | `SshConnectionTarget`     | Desktop-managed SSH environments.                                        |
 
-Bearer, relay, and SSH are persisted; primary is platform-managed. Note that Tailscale is not a
-separate target kind. A Tailscale URL is paired through the ordinary bearer path in
+Bearer, relay, and SSH are persisted; primary is platform-managed. Any manually paired endpoint,
+regardless of what private network it is reached over, is paired through the ordinary bearer path in
 [`onboarding.ts`][onboarding] (`preparePairingRegistration`), which accepts either a pairing URL or a
-host plus pairing code. Tailscale is an endpoint provider and transport, not a distinct runtime
-concept.
+host plus pairing code.
 
 ### AdvertisedEndpoint
 
@@ -85,21 +84,13 @@ unavailable endpoints and then picks, in order:
 
 There is no unconditional loopback fallback. A loopback endpoint only wins through an explicit saved
 override or `isDefault`. Persist the override by stable endpoint kind rather than raw URL where
-possible, since LAN addresses change with networks; Tailscale endpoints use provider-specific stable
-keys (`tailscale-ip:`, `tailscale-magicdns:`).
+possible, since LAN addresses change with networks.
 
 ### Endpoint providers
 
 Endpoint providers contribute advertised endpoints without becoming part of the core environment
 model: core owns environments, pairing, and connection lifecycle, and providers return normalized
-`AdvertisedEndpoint` records.
-
-Tailscale is the first provider, and T3 manages more than discovery. When `tailscaleServeEnabled` is
-set, the server acquires a Tailscale serve mapping for its actual listening port at startup with
-`ensureTailscaleServe` and releases it with `disableTailscaleServe` on scope close
-(`apps/server/src/server.ts`, using [`@t3tools/tailscale`](../../packages/tailscale/src/tailscale.ts)).
-Endpoint identifiers are synthesized in `apps/desktop/src/backend/tailscaleEndpointProvider.ts` with
-`private-network` reachability.
+`AdvertisedEndpoint` records. No third-party provider is built in today — see Future work.
 
 ### Hosted pairing request
 
@@ -148,12 +139,6 @@ the client's perspective this is still an ordinary WebSocket connection; the rou
 relay Worker only brokers credentials and a managed endpoint; application traffic then flows over
 the provisioned Cloudflare tunnel hostname for the life of the connection, not through the relay
 Worker itself. See [t3-connect.md](./t3-connect.md).
-
-### Tailscale access
-
-A T3-managed `tailscale serve` mapping exposes the server on the tailnet over HTTPS, and the
-resulting private-network endpoints are advertised for pairing. Connection then follows the ordinary
-bearer path.
 
 ### Desktop-managed SSH access
 

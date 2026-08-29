@@ -124,6 +124,7 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as ZeropsAgentAuth from "./zerops/ZeropsAgentAuth.ts";
 import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
 import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
@@ -402,6 +403,13 @@ const unavailableZeropsTopology = {
   readAt: DateTime.makeUnsafe(0),
 } as const;
 
+/** What the agent auth feed reports outside a Zerops environment. */
+const unavailableZeropsAgentAuth = {
+  available: false,
+  reason: "Not a Zerops environment",
+  agents: [],
+} as const;
+
 const buildAppUnderTest = (options?: {
   config?: Partial<ServerConfig.ServerConfig["Service"]>;
   layers?: {
@@ -445,6 +453,7 @@ const buildAppUnderTest = (options?: {
     >;
     zeropsTopology?: Partial<ZeropsTopology.ZeropsTopology["Service"]>;
     zeropsLifecycle?: Partial<ZeropsLifecycle.ZeropsLifecycle["Service"]>;
+    zeropsAgentAuth?: Partial<ZeropsAgentAuth.ZeropsAgentAuth["Service"]>;
   };
 }) =>
   Effect.gen(function* () {
@@ -479,8 +488,6 @@ const buildAppUnderTest = (options?: {
       desktopBootstrapToken: defaultDesktopBootstrapToken,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
-      tailscaleServeEnabled: false,
-      tailscaleServePort: 443,
       basePath: "",
       ...options?.config,
     };
@@ -905,6 +912,21 @@ const buildAppUnderTest = (options?: {
             }),
           ingest: () => Effect.void,
           ...options?.layers?.zeropsLifecycle,
+        }),
+      ),
+      Layer.provide(
+        // A test machine is not a Zerops environment, which is exactly the
+        // shape the real feed reports there: unavailable, no errors. Mocked
+        // rather than built so the suite never touches a real credential
+        // directory or the zembed env store.
+        Layer.mock(ZeropsAgentAuth.ZeropsAgentAuth)({
+          latest: Effect.succeed(unavailableZeropsAgentAuth),
+          changes: Stream.empty,
+          subscribe: Effect.succeed({
+            latest: unavailableZeropsAgentAuth,
+            changes: Stream.empty,
+          }),
+          ...options?.layers?.zeropsAgentAuth,
         }),
       ),
       Layer.provide(
@@ -5152,6 +5174,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             })),
           ),
           watchDoorbell: () => Effect.never,
+          markAgentOAuth: () => Effect.die("markAgentOAuth is not used by ZeropsTopology"),
         },
       });
 
@@ -5222,6 +5245,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.andThen(Deferred.succeed(attached, undefined)),
               Effect.andThen(Deferred.await(running)),
             ),
+          markAgentOAuth: () => Effect.die("markAgentOAuth is not used by ZeropsTopology"),
         },
       });
 

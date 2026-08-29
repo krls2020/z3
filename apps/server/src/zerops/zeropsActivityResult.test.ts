@@ -1,101 +1,40 @@
 import { describe, expect, it } from "@effect/vitest";
 
+import type { SpiEvent, SpiToolCall } from "@t3tools/contracts";
+
 import { ZEROPS_RESULT_TEXT_LIMIT, projectZeropsResult } from "./zeropsActivityResult.ts";
 
-/** Claude's `payload.data` — `ClaudeAdapter.ts:2762-2766`. */
-const claudeData = (options: {
-  readonly toolName?: string;
-  readonly content?: unknown;
-  readonly started?: boolean;
-}): Record<string, unknown> => ({
-  toolName: options.toolName ?? "mcp__zerops__zerops_deploy",
-  input: { hostname: "kanbandev" },
-  ...(options.started === true
-    ? {}
-    : {
-        result: {
-          type: "tool_result",
-          tool_use_id: "toolu_01",
-          content: options.content ?? [{ type: "text", text: '{"status":"DEPLOYED"}' }],
-        },
-      }),
-});
+const spiEvent = (toolCall?: SpiToolCall): SpiEvent => ({ toolCall }) as SpiEvent;
 
-/** Codex's `payload.data` — `CodexAdapter.ts:466-501`. */
-const codexData = (options: {
-  readonly tool?: string;
-  readonly content?: unknown;
-  readonly started?: boolean;
-}): Record<string, unknown> => ({
-  item: {
-    type: "mcpToolCall",
-    server: "zerops",
-    tool: options.tool ?? "zerops_deploy",
-    arguments: { hostname: "kanbandev" },
-    status: options.started === true ? "inProgress" : "completed",
-    ...(options.started === true
-      ? {}
-      : {
-          result: {
-            content: options.content ?? [{ type: "text", text: '{"status":"DEPLOYED"}' }],
-          },
-        }),
-  },
+const zeropsCall = (overrides: Partial<SpiToolCall> = {}): SpiToolCall => ({
+  name: "zerops_deploy",
+  rawName: "mcp__zerops__zerops_deploy",
+  arguments: { hostname: "kanbandev" },
+  ...overrides,
 });
 
 describe("projectZeropsResult", () => {
-  it("carries a Claude zerops result verbatim, tool name normalized", () => {
-    const projected = projectZeropsResult(claudeData({}));
+  it("carries a zerops result verbatim, tool name normalized", () => {
+    const projected = projectZeropsResult(
+      spiEvent(zeropsCall({ result: { text: '{"status":"DEPLOYED"}', failed: false } })),
+    );
 
     expect(projected?.toolName).toBe("zerops_deploy");
     expect(projected?.resultText).toBe('{"status":"DEPLOYED"}');
     expect(projected?.truncated).toBeUndefined();
   });
 
-  it("carries a Codex zerops result verbatim", () => {
-    const projected = projectZeropsResult(codexData({}));
-
-    expect(projected?.toolName).toBe("zerops_deploy");
-    expect(projected?.resultText).toBe('{"status":"DEPLOYED"}');
-  });
-
-  /**
-   * Text split across content blocks is concatenated without a separator: zcp's
-   * envelope fence sits at the end of the LAST block and a joiner would corrupt
-   * a document split mid-token (`zeropsToolResult.ts:50-55`).
-   */
-  it("concatenates multi-block text without a separator", () => {
-    const projected = projectZeropsResult(
-      claudeData({
-        content: [
-          { type: "text", text: '{"stat' },
-          { type: "image", data: "ignored" },
-          { type: "text", text: 'us":"DEPLOYED"}' },
-        ],
-      }),
-    );
-
-    expect(projected?.resultText).toBe('{"status":"DEPLOYED"}');
-  });
-
   it("ignores a tool that is not zerops", () => {
-    expect(projectZeropsResult(claudeData({ toolName: "Bash" }))).toBeUndefined();
-    expect(projectZeropsResult(codexData({ tool: "read_file" }))).toBeUndefined();
-  });
-
-  /**
-   * The gate is the tool NAME. Claude's `classifyToolItemType` tests `…delete…`
-   * before `…mcp…`, so this call arrives typed `file_change` — which is exactly
-   * why the projection hook cannot live inside the `mcp_tool_call` branch.
-   */
-  it("accepts zerops_delete, whose itemType Claude misclassifies", () => {
-    const projected = projectZeropsResult(claudeData({ toolName: "mcp__zerops__zerops_delete" }));
-
-    expect(projected?.toolName).toBe("zerops_delete");
+    const call = zeropsCall({
+      name: "browser_open",
+      rawName: "mcp__t3-code__browser_open",
+      result: { text: "ignored", failed: false },
+    });
+    expect(projectZeropsResult(spiEvent(call))).toBeUndefined();
   });
 
   it("reports the tool with no text when the call has not returned yet", () => {
-    const projected = projectZeropsResult(claudeData({ started: true }));
+    const projected = projectZeropsResult(spiEvent(zeropsCall()));
 
     expect(projected?.toolName).toBe("zerops_deploy");
     expect(projected?.resultText).toBeUndefined();
@@ -110,7 +49,7 @@ describe("projectZeropsResult", () => {
   it("drops the text whole when it exceeds the cap, and says so", () => {
     const oversized = "x".repeat(ZEROPS_RESULT_TEXT_LIMIT + 1);
     const projected = projectZeropsResult(
-      claudeData({ content: [{ type: "text", text: oversized }] }),
+      spiEvent(zeropsCall({ result: { text: oversized, failed: false } })),
     );
 
     expect(projected?.toolName).toBe("zerops_deploy");
@@ -120,16 +59,15 @@ describe("projectZeropsResult", () => {
 
   it("keeps a result sitting exactly on the cap", () => {
     const exact = "x".repeat(ZEROPS_RESULT_TEXT_LIMIT);
-    const projected = projectZeropsResult(claudeData({ content: [{ type: "text", text: exact }] }));
+    const projected = projectZeropsResult(
+      spiEvent(zeropsCall({ result: { text: exact, failed: false } })),
+    );
 
     expect(projected?.resultText).toBe(exact);
     expect(projected?.truncated).toBeUndefined();
   });
 
-  it("ignores anything that is not a data record", () => {
-    expect(projectZeropsResult(undefined)).toBeUndefined();
-    expect(projectZeropsResult("text")).toBeUndefined();
-    expect(projectZeropsResult([])).toBeUndefined();
-    expect(projectZeropsResult({})).toBeUndefined();
+  it("ignores an event that carries no toolCall", () => {
+    expect(projectZeropsResult(spiEvent(undefined))).toBeUndefined();
   });
 });

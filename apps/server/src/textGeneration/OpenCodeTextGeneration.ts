@@ -19,6 +19,13 @@ import { extractJsonObject } from "@t3tools/shared/schemaJson";
 import * as ServerConfig from "../config.ts";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import {
+  openCodeRuntimeCapability,
+  openCodeRuntimeErrorDetail,
+  parseOpenCodeModelSlug,
+  toOpenCodeFileParts,
+  type OpenCodeServerProcess,
+} from "../spi/openCodeRuntime.ts";
+import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
@@ -30,7 +37,6 @@ import {
   sanitizePrTitle,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
-import * as OpenCodeRuntime from "../provider/opencodeRuntime.ts";
 
 const OPENCODE_TEXT_GENERATION_IDLE_TTL = "30 seconds";
 
@@ -176,7 +182,7 @@ function getOpenCodeTextResponse(parts: ReadonlyArray<unknown> | undefined): str
 }
 
 interface SharedOpenCodeTextGenerationServerState {
-  server: OpenCodeRuntime.OpenCodeServerProcess | null;
+  server: OpenCodeServerProcess | null;
   /**
    * The scope that owns the shared server's lifetime. Closing this scope
    * terminates the OpenCode child process and interrupts any fibers the
@@ -194,7 +200,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
   environment?: NodeJS.ProcessEnv,
 ) {
   const serverConfig = yield* ServerConfig.ServerConfig;
-  const openCodeRuntime = yield* OpenCodeRuntime.OpenCodeRuntime;
+  const openCodeRuntime = yield* openCodeRuntimeCapability;
   const resolvedEnvironment = environment ?? process.env;
   const idleFiberScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
     Scope.close(scope, Exit.void),
@@ -227,7 +233,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
   });
 
   const scheduleIdleClose = Effect.fn("scheduleIdleClose")(function* (
-    server: OpenCodeRuntime.OpenCodeServerProcess,
+    server: OpenCodeServerProcess,
   ) {
     yield* cancelIdleCloseFiber();
     const fiber = yield* Effect.sleep(OPENCODE_TEXT_GENERATION_IDLE_TTL).pipe(
@@ -309,7 +315,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
                       (cause) =>
                         new TextGenerationError({
                           operation: input.operation,
-                          detail: OpenCodeRuntime.openCodeRuntimeErrorDetail(cause),
+                          detail: openCodeRuntimeErrorDetail(cause),
                           cause,
                         }),
                     ),
@@ -332,7 +338,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       }),
     );
 
-  const releaseSharedServer = (server: OpenCodeRuntime.OpenCodeServerProcess) =>
+  const releaseSharedServer = (server: OpenCodeServerProcess) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
         if (sharedServerState.server !== server) {
@@ -366,7 +372,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     readonly modelSelection: ModelSelection;
     readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
   }) {
-    const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(input.modelSelection.model);
+    const parsedModel = parseOpenCodeModelSlug(input.modelSelection.model);
     if (!parsedModel) {
       return yield* new TextGenerationError({
         operation: input.operation,
@@ -374,14 +380,14 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       });
     }
 
-    const fileParts = OpenCodeRuntime.toOpenCodeFileParts({
+    const fileParts = toOpenCodeFileParts({
       attachments: input.attachments?.filter((attachment) => attachment.type === "image"),
       resolveAttachmentPath: (attachment) =>
         resolveAttachmentPath({ attachmentsDir: serverConfig.attachmentsDir, attachment }),
     });
 
     const runAgainstServer = Effect.fn("runOpenCodeJson.runAgainstServer")(
-      function* (server: Pick<OpenCodeRuntime.OpenCodeServerConnection, "url">) {
+      function* (server: { readonly url: string }) {
         const client = openCodeRuntime.createOpenCodeSdkClient({
           baseUrl: server.url,
           directory: input.cwd,
