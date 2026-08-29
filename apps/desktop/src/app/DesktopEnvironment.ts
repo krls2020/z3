@@ -52,20 +52,9 @@ export class DesktopEnvironment extends Context.Service<
     readonly browserArtifactsDir: string;
     readonly rootDir: string;
     readonly appRoot: string;
-    // Root of the tree containing apps/server/dist and node_modules for the
-    // backend. Equals appRoot everywhere except packaged Windows, where the
-    // server tree ships as the resources/server.asar sidecar (see
-    // scripts/build-desktop-artifact.ts) that the asar-aware
-    // ELECTRON_RUN_AS_NODE primary reads in place and the WSL backend
-    // extracts on demand (see DesktopWslServerTree).
-    readonly serverRoot: string;
-    readonly backendEntryPath: string;
-    readonly backendCwd: string;
     readonly preloadPath: string;
     readonly appUpdateYmlPath: string;
     readonly devServerUrl: Option.Option<URL>;
-    readonly devRemoteT3ServerEntryPath: Option.Option<string>;
-    readonly configuredBackendPort: Option.Option<number>;
     readonly commitHashOverride: Option.Option<string>;
     readonly otlpTracesUrl: Option.Option<string>;
     readonly otlpExportIntervalMs: number;
@@ -80,7 +69,6 @@ export class DesktopEnvironment extends Context.Service<
     readonly legacyUserDataDirName: string;
     readonly defaultDesktopSettings: DesktopAppSettings.DesktopSettings;
     readonly runtimeInfo: DesktopRuntimeInfo;
-    readonly resolvePickFolderDefaultPath: (rawOptions: unknown) => Option.Option<string>;
     readonly resolveResourcePathCandidates: (fileName: string) => readonly string[];
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
@@ -163,10 +151,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
   });
   const rootDir = path.resolve(input.dirname, "../../..");
   const appRoot = input.isPackaged ? input.appPath : rootDir;
-  const serverRoot =
-    input.isPackaged && input.platform === "win32"
-      ? path.join(input.resourcesPath, "server.asar")
-      : appRoot;
   const branding = resolveDesktopAppBranding({
     isDevelopment,
     appVersion: input.appVersion,
@@ -208,16 +192,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
     browserArtifactsDir: path.join(stateDir, "browser-artifacts"),
     rootDir,
     appRoot,
-    serverRoot,
-    backendEntryPath: path.join(serverRoot, "apps/server/dist/bin.mjs"),
-    backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
     appUpdateYmlPath: input.isPackaged
       ? path.join(resourcesPath, "app-update.yml")
       : path.join(input.appPath, "dev-app-update.yml"),
     devServerUrl,
-    devRemoteT3ServerEntryPath: config.devRemoteT3ServerEntryPath,
-    configuredBackendPort: config.configuredBackendPort,
     commitHashOverride: config.commitHashOverride,
     otlpTracesUrl: config.otlpTracesUrl,
     otlpExportIntervalMs: config.otlpExportIntervalMs,
@@ -238,31 +217,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
       processArch: input.processArch,
       runningUnderArm64Translation: input.runningUnderArm64Translation,
     }),
-    resolvePickFolderDefaultPath: (rawOptions) => {
-      if (typeof rawOptions !== "object" || rawOptions === null) {
-        return Option.none();
-      }
-
-      const { initialPath } = rawOptions as { initialPath?: unknown };
-      if (typeof initialPath !== "string") {
-        return Option.none();
-      }
-
-      const trimmedPath = initialPath.trim();
-      if (trimmedPath.length === 0) {
-        return Option.none();
-      }
-
-      if (trimmedPath === "~") {
-        return Option.some(homeDirectory);
-      }
-
-      if (trimmedPath.startsWith("~/") || trimmedPath.startsWith("~\\")) {
-        return Option.some(path.join(homeDirectory, trimmedPath.slice(2)));
-      }
-
-      return Option.some(path.resolve(trimmedPath));
-    },
     resolveResourcePathCandidates: (fileName) => [
       path.join(input.dirname, "../resources", fileName),
       path.join(input.dirname, "../prod-resources", fileName),
