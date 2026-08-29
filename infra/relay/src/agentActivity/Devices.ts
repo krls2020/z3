@@ -63,11 +63,10 @@ export const make = Effect.gen(function* () {
       const updatedAt = DateTime.formatIso(yield* DateTime.now);
       const registration = input.registration;
 
-      // The drizzle handle is alchemy's lazy proxy chain: it only becomes a
-      // real Effect when consumed via `yield*`. Handing it to Effect.all sends
-      // the raw Proxy into the fiber runtime, which spins the isolate at 100%
-      // CPU (registrations then hang until the client aborts) — keep every db
-      // chain directly yielded.
+      // Each drizzle query-builder chain only becomes a real Effect when
+      // consumed via `yield*` — handing one to `Effect.all` instead sends the
+      // lazy builder itself into the fiber runtime rather than its result.
+      // Keep every db chain directly yielded, not batched.
       if (registration.pushToken) {
         yield* db
           .update(relayMobileDevices)
@@ -159,8 +158,8 @@ export const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({
         "relay.mobile.device_id": input.deviceId,
       });
-      // Same proxy-chain constraint as register above: db chains must be
-      // consumed via `yield*`, never passed to Effect.all.
+      // Same constraint as register above: db chains must be consumed via
+      // `yield*`, never passed to Effect.all.
       yield* db
         .delete(relayLiveActivities)
         .where(
