@@ -1,21 +1,7 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
-
-import * as NodeFSP from "node:fs/promises";
-import * as NodeCrypto from "node:crypto";
-import * as NodeModule from "node:module";
-
-import {
-  createPackageWithOptions,
-  extractAll,
-  getRawHeader,
-  statFile,
-  type DirectoryRecord,
-} from "@electron/asar";
 
 import { fromYaml } from "@t3tools/shared/schemaYaml";
-import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
@@ -28,23 +14,17 @@ import {
   type WebAssetBrand,
 } from "./lib/brand-assets.ts";
 import { getDefaultBuildArch } from "./lib/build-target-arch.ts";
-import {
-  findInlinedExternalPackages,
-  selectCliRuntimeExternalDependencies,
-} from "./lib/cli-external-packages.ts";
-import { loadRepoEnv } from "./lib/public-config.ts";
+import { findInlinedExternalPackages } from "./lib/cli-external-packages.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Config from "effect/Config";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
-import type { PlatformError } from "effect/PlatformError";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -53,7 +33,6 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
 const DESKTOP_APP_ID = "com.t3tools.t3code";
-const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
 const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
@@ -78,7 +57,6 @@ const StageWorkspaceConfig = Schema.Struct({
   allowBuilds: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   patchedDependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   overrides: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-  nodeLinker: Schema.optional(Schema.Literals(["hoisted"])),
 });
 type StageWorkspaceConfig = typeof StageWorkspaceConfig.Type;
 
@@ -87,9 +65,6 @@ const RepoRoot = Effect.service(Path.Path).pipe(
 );
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 const decodeWorkspaceConfig = Schema.decodeEffect(fromYaml(WorkspaceConfig));
-const decodeNodePtyManifest = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Struct({ version: Schema.String })),
-);
 const encodeStageWorkspaceConfig = Schema.encodeEffect(fromYaml(StageWorkspaceConfig));
 
 const readWorkspaceConfig = Effect.fn("readWorkspaceConfig")(function* () {
@@ -162,7 +137,6 @@ interface BuildCliInput {
   readonly verbose: Option.Option<boolean>;
   readonly mockUpdates: Option.Option<boolean>;
   readonly mockUpdateServerPort: Option.Option<number>;
-  readonly wslPrebuild: Option.Option<string>;
 }
 
 function detectHostBuildPlatform(hostPlatform: string): typeof BuildPlatform.Type | undefined {
@@ -180,41 +154,6 @@ const getDefaultArch = Effect.fn("getDefaultArch")(function* (platform: typeof B
 
   return yield* getDefaultBuildArch(platform, config);
 });
-
-export class MacPasskeySigningConfigurationResolutionError extends Schema.TaggedErrorClass<MacPasskeySigningConfigurationResolutionError>()(
-  "MacPasskeySigningConfigurationResolutionError",
-  {
-    cause: Schema.Defect(),
-  },
-) {
-  static fromCause(
-    cause: unknown,
-  ): MacPasskeySigningConfigurationError | MacPasskeySigningConfigurationResolutionError {
-    return isMacPasskeySigningConfigurationError(cause)
-      ? cause
-      : new MacPasskeySigningConfigurationResolutionError({ cause });
-  }
-
-  override get message(): string {
-    return "Failed to resolve macOS passkey signing configuration.";
-  }
-}
-
-export class ClerkPasskeyNativePackageMissingError extends Schema.TaggedErrorClass<ClerkPasskeyNativePackageMissingError>()(
-  "ClerkPasskeyNativePackageMissingError",
-  {
-    packageName: Schema.String,
-    binaryFileName: Schema.String,
-    packageEntryPath: Schema.String,
-    platform: BuildPlatform,
-    arch: BuildArch,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Clerk passkey native package is missing: ${this.packageName}`;
-  }
-}
 
 export class UnsupportedHostBuildPlatformError extends Schema.TaggedErrorClass<UnsupportedHostBuildPlatformError>()(
   "UnsupportedHostBuildPlatformError",
@@ -357,15 +296,10 @@ export class UnsupportedDesktopBuildPlatformError extends Schema.TaggedErrorClas
 }
 
 const dependencyResolutionDescriptions = {
-  "server-production": "production dependencies",
   "workspace-overrides": "overrides",
   "desktop-runtime": "desktop runtime dependencies",
 } as const;
-const DependencyResolutionKind = Schema.Literals([
-  "server-production",
-  "workspace-overrides",
-  "desktop-runtime",
-]);
+const DependencyResolutionKind = Schema.Literals(["workspace-overrides", "desktop-runtime"]);
 
 export class DesktopBuildDependencyResolutionError extends Schema.TaggedErrorClass<DesktopBuildDependencyResolutionError>()(
   "DesktopBuildDependencyResolutionError",
@@ -380,29 +314,18 @@ export class DesktopBuildDependencyResolutionError extends Schema.TaggedErrorCla
   }
 }
 
-export class MissingServerProductionDependenciesError extends Schema.TaggedErrorClass<MissingServerProductionDependenciesError>()(
-  "MissingServerProductionDependenciesError",
-  {
-    manifestPath: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `Could not resolve production dependencies from ${this.manifestPath}.`;
-  }
-}
-
 const DesktopBuildInputArtifact = Schema.Literals([
   "desktop-dist",
   "desktop-resources",
   "server-dist",
-  "bundled-server-client",
+  "web-dist",
 ]);
 type DesktopBuildInputArtifact = typeof DesktopBuildInputArtifact.Type;
 const desktopBuildInputArtifactNames = {
   "desktop-dist": "desktopDist",
   "desktop-resources": "desktopResources",
   "server-dist": "serverDist",
-  "bundled-server-client": "bundled server client",
+  "web-dist": "hosted web bundle (apps/web/dist)",
 } satisfies Record<DesktopBuildInputArtifact, string>;
 
 /**
@@ -412,42 +335,12 @@ const desktopBuildInputArtifactNames = {
  */
 const BUNDLE_SELF_CONTAINED_SENTINEL = "effect";
 
-const BUNDLE_SELF_CHECK_TIMEOUT = Duration.seconds(120);
-const WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT = Duration.seconds(30);
-
-const WINDOWS_PRIMARY_FFF_PROBE_SOURCE = `
-const { join } = await import("node:path");
-const { pathToFileURL } = await import("node:url");
-const { FileFinder } = await import(pathToFileURL(process.argv[1]).href);
-const probeRoot = process.argv[2];
-const result = FileFinder.create({
-  basePath: probeRoot,
-  frecencyDbPath: join(probeRoot, "frecency.mdb"),
-  historyDbPath: join(probeRoot, "history.mdb"),
-  disableWatch: true,
-  disableMmapCache: true,
-  disableContentIndexing: true,
-});
-if (!result.ok) throw new Error(result.error);
-result.value.destroy();
-`;
-
 export class ExternalizedBundleError extends Schema.TaggedErrorClass<ExternalizedBundleError>()(
   "ExternalizedBundleError",
   { sentinel: Schema.String, inlinedPackageCount: Schema.Number },
 ) {
   override get message(): string {
     return `The server bundle did not inline "${this.sentinel}" (${this.inlinedPackageCount} packages inlined). The bundle is meant to be self-contained apart from the runtime externals; if its dependencies are external again they will be absent from the sidecar, and the backend will fail with ERR_MODULE_NOT_FOUND. Check the deps.alwaysBundle wiring in apps/server/vite.config.ts.`;
-  }
-}
-
-export class BundleNotSelfContainedError extends Schema.TaggedErrorClass<BundleNotSelfContainedError>()(
-  "BundleNotSelfContainedError",
-  { exitCode: Schema.Number, output: Schema.String },
-) {
-  override get message(): string {
-    return `The packaged server bundle could not load from the isolated, extracted sidecar (exit ${this.exitCode}). Anything it imports that is neither a Node built-in nor in the selected runtime-external closure is unavailable to both backends. Output:
-${this.output}`;
   }
 }
 
@@ -474,22 +367,11 @@ export class MissingDesktopBuildInputError extends Schema.TaggedErrorClass<Missi
   {
     artifact: DesktopBuildInputArtifact,
     artifactPath: Schema.String,
-    buildCommand: Schema.Literal("vp run build:desktop"),
+    buildCommand: Schema.Literals(["vp run build:desktop", "vp run --filter @t3tools/web build"]),
   },
 ) {
   override get message(): string {
     return `Missing ${desktopBuildInputArtifactNames[this.artifact]} at ${this.artifactPath}. Run '${this.buildCommand}' first.`;
-  }
-}
-
-export class MacProvisioningProfileNotFoundError extends Schema.TaggedErrorClass<MacProvisioningProfileNotFoundError>()(
-  "MacProvisioningProfileNotFoundError",
-  {
-    provisioningProfilePath: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `macOS provisioning profile not found: ${this.provisioningProfilePath}`;
   }
 }
 
@@ -516,102 +398,6 @@ export class DesktopBuildNoArtifactsProducedError extends Schema.TaggedErrorClas
 ) {
   override get message(): string {
     return `Build completed but no files were produced in ${this.distPath}`;
-  }
-}
-
-export class WslNodePtyPrebuildMissingError extends Schema.TaggedErrorClass<WslNodePtyPrebuildMissingError>()(
-  "WslNodePtyPrebuildMissingError",
-  {
-    prebuildPath: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `WSL node-pty prebuild not found at ${this.prebuildPath}.`;
-  }
-}
-
-export class WindowsServerSidecarPackError extends Schema.TaggedErrorClass<WindowsServerSidecarPackError>()(
-  "WindowsServerSidecarPackError",
-  {
-    asarPath: Schema.String,
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Failed to pack the Windows server sidecar at ${this.asarPath}.`;
-  }
-}
-
-export class WindowsPrimaryNativeProbeError extends Schema.TaggedErrorClass<WindowsPrimaryNativeProbeError>()(
-  "WindowsPrimaryNativeProbeError",
-  {
-    executablePath: Schema.String,
-    exitCode: Schema.Number,
-    output: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `The packaged Windows primary could not load fff from server.asar (exit ${this.exitCode}). Output:\n${this.output}`;
-  }
-}
-
-const WindowsPackagedPayloadValidationReason = Schema.Literals([
-  "packaged-app-missing",
-  "sidecar-missing",
-  "sidecar-invalid",
-  "unpacked-native-missing",
-  "resource-monitor-missing",
-  "wsl-runtime-missing",
-  "wsl-runtime-invalid",
-  "file-limit-exceeded",
-]);
-
-export class WindowsPackagedPayloadValidationError extends Schema.TaggedErrorClass<WindowsPackagedPayloadValidationError>()(
-  "WindowsPackagedPayloadValidationError",
-  {
-    reason: WindowsPackagedPayloadValidationReason,
-    packagedAppDir: Schema.String,
-    missingFiles: Schema.optionalKey(Schema.Array(Schema.String)),
-    fileCount: Schema.optionalKey(Schema.Int),
-    fileLimit: Schema.optionalKey(Schema.Int),
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    if (this.reason === "file-limit-exceeded") {
-      return `Windows packaged payload contains ${String(this.fileCount)} files; expected at most ${String(this.fileLimit)}.`;
-    }
-    if (this.reason === "unpacked-native-missing") {
-      return `Windows server sidecar is missing ${String(this.missingFiles?.length ?? 0)} unpacked native files.`;
-    }
-    if (this.reason === "resource-monitor-missing") {
-      return "Windows packaged payload is missing the resource monitor executable.";
-    }
-    if (this.reason === "wsl-runtime-missing") {
-      return "Windows packaged payload is missing the WSL runtime archive or SHA-256 sidecar.";
-    }
-    if (this.reason === "wsl-runtime-invalid") {
-      return "Windows packaged payload contains an invalid WSL runtime archive.";
-    }
-    if (this.reason === "sidecar-invalid") {
-      return "Windows packaged payload contains an invalid server.asar sidecar.";
-    }
-    if (this.reason === "sidecar-missing") {
-      return "Windows packaged payload is missing resources/server.asar.";
-    }
-    return `Windows packaged application directory was not found at ${this.packagedAppDir}.`;
-  }
-}
-
-export class WslNodePtyManifestReadError extends Schema.TaggedErrorClass<WslNodePtyManifestReadError>()(
-  "WslNodePtyManifestReadError",
-  {
-    manifestPath: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Could not read node-pty version from ${this.manifestPath}.`;
   }
 }
 
@@ -772,7 +558,6 @@ interface ResolvedBuildOptions {
   readonly verbose: boolean;
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
-  readonly wslPrebuild: string | undefined;
 }
 
 interface StagePackageJson {
@@ -799,440 +584,26 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
   "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
-  // Windows stages the server sidecar below prod-resources so electron-builder
-  // can copy it using project-relative extraResources matchers. Keep those
-  // staging inputs out of app.asar; they are emitted once at resources/.
-  "!apps/desktop/prod-resources/windows-server",
-  "!apps/desktop/prod-resources/windows-server/**/*",
-  "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
-  "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
-] as const;
-// Windows terminal helpers cannot run on macOS and slow signing and notarization.
-export const MAC_FILE_EXCLUSIONS = [
-  "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
-  "!**/node_modules/node-pty/third_party/conpty/**/*",
-] as const;
-// Windows ships the server tree (bundle + node_modules) as a separate
-// resources/server.asar sidecar instead of loose files: the NSIS installer
-// then extracts a handful of large archives instead of thousands of small
-// files, which dominates install (and update) time. The Windows primary runs
-// the server from inside server.asar via the asar-aware ELECTRON_RUN_AS_NODE
-// runtime. WSL normally uses the dedicated compressed Linux runtime below;
-// DesktopWslServerTree can still materialize this sidecar as a fallback.
-export const WINDOWS_SERVER_ASAR_RESOURCE = "server.asar";
-// dlopen/spawn need real files, so native modules, shared libraries, and
-// helper executables live in the server.asar.unpacked sibling (the standard
-// asar redirect convention). Everything else stays packed.
-export const WINDOWS_SERVER_ASAR_UNPACK_GLOB =
-  "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}";
-// Mirrors DESKTOP_FILE_EXCLUSIONS for the hand-packed sidecar: the Claude SDK
-// platform packages are dead weight (see above), and node_modules/.bin shims
-// are never spawned at runtime (and are symlinks on POSIX build hosts, which
-// the asar extraction path deliberately does not support).
-export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
-  "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
-  "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
-  "**/node_modules/.bin",
-  "**/node_modules/.bin/**",
+  // Every prod-resources staging input is emitted once at resources/ via
+  // extraResources. Keep it out of app.asar too, or it packs twice.
+  "!apps/desktop/prod-resources/web",
+  "!apps/desktop/prod-resources/web/**/*",
 ] as const;
 
-export function resolveWindowsServerAsarIgnoreGlobs(arch: typeof BuildArch.Type) {
-  const unusedArch = arch === "arm64" ? "x64" : "arm64";
-  const unusedPrebuild = `**/node_modules/node-pty/prebuilds/win32-${unusedArch}`;
-  const unusedConpty = `**/node_modules/node-pty/third_party/conpty/*/win10-${unusedArch}`;
-
-  return [
-    ...WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
-    unusedPrebuild,
-    `${unusedPrebuild}/**`,
-    unusedConpty,
-    `${unusedConpty}/**`,
-  ];
-}
-
-export const WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT = 80;
-export const WINDOWS_SERVER_RESOURCE_SOURCE_DIR = "apps/desktop/prod-resources/windows-server";
-export const WINDOWS_SERVER_EXTRA_RESOURCES = [
-  {
-    // Copy the archive and its .unpacked sibling from one parent directory.
-    // Mapping the .unpacked directory as an independent FileSet silently
-    // omitted it from Windows packages even though electron-builder copied
-    // the adjacent archive.
-    from: WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
-    to: ".",
-    filter: [WINDOWS_SERVER_ASAR_RESOURCE, `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/**/*`],
-  },
-] as const;
-export const WSL_RUNTIME_ARCHIVE_NAME = "wsl-runtime.tar.gz";
-export const WSL_RUNTIME_ARCHIVE_HASH_NAME = `${WSL_RUNTIME_ARCHIVE_NAME}.sha256`;
-export const WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE = {
-  from: `apps/desktop/prod-resources/${WSL_RUNTIME_ARCHIVE_NAME}`,
-  to: WSL_RUNTIME_ARCHIVE_NAME,
-} as const;
-export const WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE = {
-  from: `apps/desktop/prod-resources/${WSL_RUNTIME_ARCHIVE_HASH_NAME}`,
-  to: WSL_RUNTIME_ARCHIVE_HASH_NAME,
-} as const;
-export const WSL_RUNTIME_ARCHIVE_CONTENT_ROOTS = ["apps/server/dist", "node_modules"] as const;
-
-// The WSL runtime uses only the Linux half of the shared Windows/WSL sidecar.
-// Keep build/install metadata and target-native packages that cannot run in
-// WSL out of the compressed archive.
-export const WSL_RUNTIME_ARCHIVE_EXCLUDED_PREFIXES = [
-  "node_modules/@anthropic-ai/claude-agent-sdk-",
-  "node_modules/.bin",
-  "node_modules/.pnpm",
-  "node_modules/.modules.yaml",
-  "node_modules/.pnpm-workspace-state-v1.json",
-  "node_modules/node-pty/prebuilds/darwin-",
-  "node_modules/node-pty/prebuilds/win32-",
-  "node_modules/node-pty/build",
-  "node_modules/node-pty/third_party/conpty",
-  "node_modules/@ff-labs/fff-bin-win32-",
-  "node_modules/@yuuang/ffi-rs-win32-",
-  "node_modules/@msgpackr-extract/msgpackr-extract-win32-",
-] as const;
-// WSL runs the same CPU arch as the Windows host; universal is mac-only.
-export const resolveWslPrebuildArch = (arch: typeof BuildArch.Type): "x64" | "arm64" | undefined =>
-  arch === "x64" ? "x64" : arch === "arm64" ? "arm64" : undefined;
-
-// A packaged WSL runtime is only usable when a Linux pty.node is bundled with
-// it, so this one predicate decides both whether the archive is built and
-// whether the packaging config ships it. Without it the build would produce an
-// archive that can never pass the install script's payload check, and every
-// launch would extract a few hundred MB from /mnt/c only to throw it away.
-export const bundlesWslRuntime = (input: {
-  readonly arch: typeof BuildArch.Type;
-  readonly prebuildPath: string | undefined;
-}): boolean => input.prebuildPath !== undefined && resolveWslPrebuildArch(input.arch) !== undefined;
-
-export const WSL_RUNTIME_EXTRA_RESOURCES = [
-  WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
-  WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
-] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
   },
+  // The hosted-static apps/web build (VITE_HOSTED_APP_CHANNEL set,
+  // VITE_HTTP_URL/VITE_WS_URL unset). DesktopEnvironment.resolveResourcePathCandidates
+  // resolves "web/index.html" against resources/, and ElectronProtocol serves
+  // every file under its parent directory — see stageHostedWebBundle.
+  {
+    from: "apps/desktop/prod-resources/web",
+    to: "web",
+  },
 ] as const;
-
-export interface MacPasskeySigningConfiguration {
-  readonly appId: string;
-  readonly teamId: string;
-  readonly rpDomains: readonly string[];
-  readonly provisioningProfilePath: string;
-}
-
-export const InvalidMacPasskeyRpDomainReason = Schema.Literals([
-  "empty",
-  "scheme-not-allowed",
-  "parse-failed",
-  "credentials-not-allowed",
-  "port-not-allowed",
-  "path-not-allowed",
-  "query-not-allowed",
-  "fragment-not-allowed",
-  "hostname-mismatch",
-]);
-export type InvalidMacPasskeyRpDomainReason = typeof InvalidMacPasskeyRpDomainReason.Type;
-
-export class InvalidMacPasskeyRpDomainError extends Schema.TaggedErrorClass<InvalidMacPasskeyRpDomainError>()(
-  "InvalidMacPasskeyRpDomainError",
-  {
-    reason: InvalidMacPasskeyRpDomainReason,
-    inputLength: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {
-  override get message(): string {
-    return `Invalid passkey RP domain (${this.reason}).`;
-  }
-}
-
-export class InvalidAppleTeamIdError extends Schema.TaggedErrorClass<InvalidAppleTeamIdError>()(
-  "InvalidAppleTeamIdError",
-  {
-    teamId: Schema.String,
-  },
-) {
-  override get message(): string {
-    return `T3CODE_APPLE_TEAM_ID '${this.teamId}' must be a 10-character Apple Developer Team ID.`;
-  }
-}
-
-export class MissingMacPasskeyProvisioningProfileError extends Schema.TaggedErrorClass<MissingMacPasskeyProvisioningProfileError>()(
-  "MissingMacPasskeyProvisioningProfileError",
-  {},
-) {
-  override get message(): string {
-    return "T3CODE_MACOS_PROVISIONING_PROFILE must point to an Associated Domains provisioning profile.";
-  }
-}
-
-export class MissingMacPasskeyDomainConfigurationError extends Schema.TaggedErrorClass<MissingMacPasskeyDomainConfigurationError>()(
-  "MissingMacPasskeyDomainConfigurationError",
-  {},
-) {
-  override get message(): string {
-    return "T3CODE_CLERK_PUBLISHABLE_KEY or T3CODE_CLERK_PASSKEY_RP_DOMAINS is required for signed macOS passkey builds.";
-  }
-}
-
-export class InvalidMacPasskeyPublishableKeyError extends Schema.TaggedErrorClass<InvalidMacPasskeyPublishableKeyError>()(
-  "InvalidMacPasskeyPublishableKeyError",
-  {
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return "T3CODE_CLERK_PUBLISHABLE_KEY is invalid.";
-  }
-}
-
-export class MissingMacPasskeyRpDomainError extends Schema.TaggedErrorClass<MissingMacPasskeyRpDomainError>()(
-  "MissingMacPasskeyRpDomainError",
-  {},
-) {
-  override get message(): string {
-    return "At least one Clerk passkey RP domain is required.";
-  }
-}
-
-export const MacPasskeySigningConfigurationError = Schema.Union([
-  InvalidMacPasskeyRpDomainError,
-  InvalidAppleTeamIdError,
-  MissingMacPasskeyProvisioningProfileError,
-  MissingMacPasskeyDomainConfigurationError,
-  InvalidMacPasskeyPublishableKeyError,
-  MissingMacPasskeyRpDomainError,
-]);
-export type MacPasskeySigningConfigurationError = typeof MacPasskeySigningConfigurationError.Type;
-export const isMacPasskeySigningConfigurationError = Schema.is(MacPasskeySigningConfigurationError);
-
-function normalizePasskeyRpDomain(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  const inputLength = value.length;
-  if (normalized.length === 0) {
-    throw new InvalidMacPasskeyRpDomainError({ reason: "empty", inputLength });
-  }
-  if (/^[a-z][a-z\d+.-]*:\/\//u.test(normalized)) {
-    throw new InvalidMacPasskeyRpDomainError({
-      reason: "scheme-not-allowed",
-      inputLength,
-    });
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(`https://${normalized}`);
-  } catch (cause) {
-    throw new InvalidMacPasskeyRpDomainError({ reason: "parse-failed", inputLength, cause });
-  }
-
-  let reason: InvalidMacPasskeyRpDomainReason | undefined;
-  if (parsed.username.length > 0 || parsed.password.length > 0) {
-    reason = "credentials-not-allowed";
-  } else if (parsed.port.length > 0) {
-    reason = "port-not-allowed";
-  } else if (parsed.pathname !== "/") {
-    reason = "path-not-allowed";
-  } else if (parsed.search.length > 0) {
-    reason = "query-not-allowed";
-  } else if (parsed.hash.length > 0) {
-    reason = "fragment-not-allowed";
-  } else if (parsed.host !== normalized) {
-    reason = "hostname-mismatch";
-  }
-  if (reason) {
-    throw new InvalidMacPasskeyRpDomainError({ reason, inputLength });
-  }
-
-  return parsed.hostname;
-}
-
-export function resolveMacPasskeySigningConfiguration(
-  env: Readonly<Record<string, string | undefined>>,
-): MacPasskeySigningConfiguration {
-  const teamId = env.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase() ?? "";
-  if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
-    throw new InvalidAppleTeamIdError({ teamId });
-  }
-
-  const provisioningProfilePath = env.T3CODE_MACOS_PROVISIONING_PROFILE?.trim() ?? "";
-  if (provisioningProfilePath.length === 0) {
-    throw new MissingMacPasskeyProvisioningProfileError();
-  }
-
-  const configuredRpDomains = env.T3CODE_CLERK_PASSKEY_RP_DOMAINS?.trim();
-  let rpDomains: readonly string[];
-  if (configuredRpDomains) {
-    rpDomains = configuredRpDomains.split(",").map(normalizePasskeyRpDomain);
-  } else {
-    const publishableKey = env.T3CODE_CLERK_PUBLISHABLE_KEY?.trim();
-    if (!publishableKey) {
-      throw new MissingMacPasskeyDomainConfigurationError();
-    }
-    let hostname: string;
-    try {
-      hostname = clerkFrontendApiHostnameFromPublishableKey(publishableKey);
-    } catch (cause) {
-      throw new InvalidMacPasskeyPublishableKeyError({ cause });
-    }
-    rpDomains = [normalizePasskeyRpDomain(hostname)];
-  }
-
-  const uniqueRpDomains = [...new Set(rpDomains)];
-  if (uniqueRpDomains.length === 0) {
-    throw new MissingMacPasskeyRpDomainError();
-  }
-
-  return {
-    appId: DESKTOP_APP_ID,
-    teamId,
-    rpDomains: uniqueRpDomains,
-    provisioningProfilePath,
-  };
-}
-
-function escapeXml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
-
-export function renderMacPasskeyEntitlements(
-  configuration: MacPasskeySigningConfiguration,
-): string {
-  const associatedDomains = configuration.rpDomains
-    .map((domain) => `      <string>webcredentials:${escapeXml(domain)}</string>`)
-    .join("\n");
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-  <dict>
-    <key>com.apple.application-identifier</key>
-    <string>${escapeXml(`${configuration.teamId}.${configuration.appId}`)}</string>
-    <key>com.apple.developer.team-identifier</key>
-    <string>${escapeXml(configuration.teamId)}</string>
-    <key>com.apple.developer.associated-domains</key>
-    <array>
-${associatedDomains}
-    </array>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.disable-library-validation</key>
-    <true/>
-  </dict>
-</plist>
-`;
-}
-
-export function resolveFffNativeDependencies(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-  version: string,
-): Record<string, string> {
-  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
-
-  if (platform === "mac") {
-    return Object.fromEntries(
-      architectures.map((architecture) => [`@ff-labs/fff-bin-darwin-${architecture}`, version]),
-    );
-  }
-
-  if (platform === "win") {
-    return Object.fromEntries(
-      architectures.map((architecture) => [`@ff-labs/fff-bin-win32-${architecture}`, version]),
-    );
-  }
-
-  return Object.fromEntries(
-    architectures.flatMap((architecture) =>
-      ["gnu", "musl"].map((libc) => [`@ff-labs/fff-bin-linux-${architecture}-${libc}`, version]),
-    ),
-  );
-}
-
-export function resolveMacStageDependencies(input: {
-  readonly serverDependencies: Record<string, string>;
-  readonly desktopDependencies: Record<string, string>;
-  readonly arch: typeof BuildArch.Type;
-  readonly fffNodeVersion: string;
-}) {
-  return {
-    ...selectCliRuntimeExternalDependencies(input.serverDependencies),
-    ...input.desktopDependencies,
-    ...resolveFffNativeDependencies("mac", input.arch, input.fffNodeVersion),
-  };
-}
-
-export interface ClerkPasskeyNativeArtifact {
-  readonly packageName: string;
-  readonly binaryFileName: string;
-}
-
-export function resolveClerkPasskeyNativeArtifacts(
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-): readonly ClerkPasskeyNativeArtifact[] {
-  const architectures = arch === "universal" ? (["arm64", "x64"] as const) : [arch];
-
-  if (platform === "mac") {
-    return architectures.map((architecture) => ({
-      packageName: `@clerk/electron-passkeys-darwin-${architecture}`,
-      binaryFileName: `electron-passkeys.darwin-${architecture}.node`,
-    }));
-  }
-
-  if (platform === "win") {
-    return architectures.map((architecture) => ({
-      packageName: `@clerk/electron-passkeys-win32-${architecture}-msvc`,
-      binaryFileName: `electron-passkeys.win32-${architecture}-msvc.node`,
-    }));
-  }
-
-  return [];
-}
-
-// pnpm nests the architecture package under @clerk/electron-passkeys, while electron-builder only
-// retains collected top-level dependencies. The SDK loader checks beside index.js first, so stage
-// the binary there and let electron-builder's native-addon handling unpack it from the ASAR.
-const stageClerkPasskeyNativeBinaries = Effect.fn("stageClerkPasskeyNativeBinaries")(function* (
-  stageAppDir: string,
-  platform: typeof BuildPlatform.Type,
-  arch: typeof BuildArch.Type,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const packageEntryPath = yield* fs.realPath(
-    path.join(stageAppDir, "node_modules", "@clerk", "electron-passkeys", "index.js"),
-  );
-  const packageDir = path.dirname(packageEntryPath);
-  const packageRequire = NodeModule.createRequire(packageEntryPath);
-
-  for (const artifact of resolveClerkPasskeyNativeArtifacts(platform, arch)) {
-    const sourcePath = yield* Effect.try({
-      try: () => packageRequire.resolve(artifact.packageName),
-      catch: (cause) =>
-        new ClerkPasskeyNativePackageMissingError({
-          packageName: artifact.packageName,
-          binaryFileName: artifact.binaryFileName,
-          packageEntryPath,
-          platform,
-          arch,
-          cause,
-        }),
-    });
-    yield* fs.copyFile(sourcePath, path.join(packageDir, artifact.binaryFileName));
-  }
-});
 
 export function createStageWorkspaceConfig(input: {
   readonly platform: typeof BuildPlatform.Type;
@@ -1240,15 +611,8 @@ export function createStageWorkspaceConfig(input: {
   readonly allowBuilds?: Record<string, boolean>;
   readonly patchedDependencies?: Record<string, string>;
   readonly overrides?: Record<string, string>;
-  // The Windows server sidecar stage runs both the Windows primary and the
-  // WSL Linux backend from one dependency tree, so it needs win32 + linux
-  // natives (e.g. @yuuang/ffi-rs-linux-x64-gnu) — and a hoisted (physical,
-  // symlink-free) node_modules: the tree gets packed into server.asar and
-  // later extracted for WSL, and neither step can rely on pnpm's
-  // symlink/junction layout surviving the trip.
-  readonly linuxServerBackend?: boolean;
 }): StageWorkspaceConfig {
-  const { platform, arch, allowBuilds, patchedDependencies, overrides, linuxServerBackend } = input;
+  const { platform, arch, allowBuilds, patchedDependencies, overrides } = input;
   const hostOs = platform === "mac" ? "darwin" : platform === "win" ? "win32" : "linux";
   const hostCpu = arch === "universal" ? ["arm64", "x64"] : [arch];
   // Linux AppImages execute a Linux/glibc Node process that loads
@@ -1261,16 +625,10 @@ export function createStageWorkspaceConfig(input: {
           cpu: hostCpu,
           libc: ["glibc"],
         }
-      : linuxServerBackend
-        ? {
-            os: Array.from(new Set([hostOs, "linux"])),
-            cpu: hostCpu,
-            libc: ["glibc"],
-          }
-        : {
-            os: [hostOs],
-            cpu: hostCpu,
-          };
+      : {
+          os: [hostOs],
+          cpu: hostCpu,
+        };
 
   return {
     supportedArchitectures,
@@ -1279,7 +637,6 @@ export function createStageWorkspaceConfig(input: {
       ? { patchedDependencies }
       : {}),
     ...(overrides && Object.keys(overrides).length > 0 ? { overrides } : {}),
-    ...(linuxServerBackend ? { nodeLinker: "hoisted" as const } : {}),
   };
 }
 
@@ -1325,11 +682,6 @@ const BuildEnvConfig = Config.all({
   verbose: Config.boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
   mockUpdates: Config.boolean("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
   mockUpdateServerPort: Config.string("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
-  // Path to a prebuilt Linux node-pty binary (pty.node) for the target arch,
-  // produced by the Linux CI job and handed to the Windows packaging job. Placed
-  // into the staged node-pty so the WSL backend ships a ready binary and never
-  // compiles on the user's machine.
-  wslPrebuild: Config.string("T3CODE_DESKTOP_WSL_PREBUILD").pipe(Config.option),
 });
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
@@ -1421,9 +773,6 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
           ),
         ));
 
-  const wslPrebuild =
-    Option.getOrUndefined(input.wslPrebuild) ?? Option.getOrUndefined(env.wslPrebuild);
-
   return {
     platform,
     target,
@@ -1436,7 +785,6 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     verbose,
     mockUpdates,
     mockUpdateServerPort,
-    wslPrebuild,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -1467,63 +815,6 @@ const runCommand = Effect.fn("runCommand")(function* (
     });
   }
 });
-
-/**
- * Every `node_modules` directory that would be visible from `startDir`.
- *
- * The self-containment check is only meaningful in a directory with none of
- * these: Node walks parents when resolving a bare import, so a stray
- * node_modules above the probe would satisfy imports that are missing from the
- * packaged tree and turn the check into a silent pass.
- */
-function trimTrailingSeparators(value: string): string {
-  let end = value.length;
-  while (end > 1 && (value[end - 1] === "/" || value[end - 1] === "\\")) end -= 1;
-  return value.slice(0, end);
-}
-
-/**
- * Length of the `\\server\share` prefix, or 0 when the path is not UNC.
- *
- * The share is the highest real directory on a UNC path: `\\server` on its own
- * is not one, so the ancestor walk must stop there.
- */
-function uncShareRootLength(value: string): number {
-  const isUnc = value.startsWith("\\\\") || value.startsWith("//");
-  if (!isUnc) return 0;
-  const separator = /[\\/]/;
-  const serverEnd = value.slice(2).search(separator);
-  if (serverEnd < 0) return value.length;
-  const shareStart = 2 + serverEnd + 1;
-  const shareEnd = value.slice(shareStart).search(separator);
-  return shareEnd < 0 ? value.length : shareStart + shareEnd;
-}
-
-export function ancestorNodeModulesPaths(
-  startDir: string,
-  separator: string,
-): ReadonlyArray<string> {
-  // Walks with lastIndexOf rather than splitting into segments so UNC roots
-  // (\\server\share) and drive roots keep their prefix instead of being
-  // rebuilt into a relative path that silently resolves against the build cwd.
-  const paths: string[] = [];
-  let current = trimTrailingSeparators(startDir);
-  // On a UNC path the share itself is the root: \\server is not a directory, so
-  // walking past \\server\share would emit paths that cannot exist.
-  const uncRootLength = uncShareRootLength(current);
-  for (;;) {
-    const cut = Math.max(current.lastIndexOf("/"), current.lastIndexOf("\\"));
-    if (cut < 0 || (uncRootLength > 0 && cut < uncRootLength)) break;
-    const parent = cut === 0 ? current.slice(0, 1) : current.slice(0, cut);
-    if (parent === current) break;
-    paths.push(
-      parent.endsWith(separator) ? `${parent}node_modules` : `${parent}${separator}node_modules`,
-    );
-    if (cut === 0) break;
-    current = parent;
-  }
-  return paths;
-}
 
 const NativeMarkerManifest = Schema.Struct({
   dependencies: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -1579,160 +870,6 @@ const hasNativeLoaderMarkers = Effect.fn("hasNativeLoaderMarkers")(function* (pa
     (dependency) => dependency.startsWith("node-gyp-build"),
   );
 });
-
-export const copyDirectoryPreservingSymlinks = Effect.fn("copyDirectoryPreservingSymlinks")(
-  function* (source: string, destination: string) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-
-    // Effect's Node implementation delegates directory copies to fs.cp, whose
-    // default rewrites links into absolute source-tree references. Recreate every
-    // in-tree directory link as a junction rooted in the isolated copy so the
-    // probe cannot resolve through staging and Windows needs no symlink privilege.
-    yield* fs.copy(source, destination);
-
-    const restoreRelativeSymlinks = (
-      sourceDirectory: string,
-      destinationDirectory: string,
-    ): Effect.Effect<void, PlatformError | BundleNotSelfContainedError> =>
-      Effect.gen(function* () {
-        for (const entry of yield* fs.readDirectory(sourceDirectory)) {
-          const sourceEntry = path.join(sourceDirectory, entry);
-          const destinationEntry = path.join(destinationDirectory, entry);
-          const linkTarget = yield* fs.readLink(sourceEntry).pipe(Effect.option);
-          if (Option.isSome(linkTarget)) {
-            const absoluteSourceTarget = path.isAbsolute(linkTarget.value)
-              ? linkTarget.value
-              : path.resolve(path.dirname(sourceEntry), linkTarget.value);
-            const sourceRelativeTarget = path.relative(source, absoluteSourceTarget);
-            if (
-              sourceRelativeTarget === ".." ||
-              sourceRelativeTarget.startsWith(`..${path.sep}`) ||
-              path.isAbsolute(sourceRelativeTarget)
-            ) {
-              return yield* new BundleNotSelfContainedError({
-                exitCode: -1,
-                output: `Refusing to copy symlink ${sourceEntry}: its target ${absoluteSourceTarget} escapes the packaged tree.`,
-              });
-            }
-            const target = path.join(destination, sourceRelativeTarget);
-            yield* fs.remove(destinationEntry, { recursive: true, force: true });
-            yield* Effect.tryPromise({
-              try: () => NodeFSP.symlink(target, destinationEntry, "junction"),
-              catch: (cause) =>
-                new BundleNotSelfContainedError({
-                  exitCode: -1,
-                  output: `Could not isolate ${sourceEntry}: ${String(cause)}`,
-                }),
-            });
-          } else {
-            const info = yield* fs.stat(sourceEntry);
-            if (info.type === "Directory") {
-              yield* restoreRelativeSymlinks(sourceEntry, destinationEntry);
-            }
-          }
-        }
-      });
-
-    yield* restoreRelativeSymlinks(source, destination);
-  },
-);
-
-const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSelfContained")(
-  function* (input: { readonly asarPath: string; readonly verbose: boolean }) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-
-    const probeRoot = yield* fs.makeTempDirectoryScoped({
-      prefix: "t3code-bundle-selfcheck-",
-    });
-    const extractedApp = path.join(probeRoot, "extracted");
-    const probeApp = path.join(probeRoot, "app");
-    yield* Effect.try({
-      try: () => extractAll(input.asarPath, extractedApp),
-      catch: (cause) =>
-        new BundleNotSelfContainedError({
-          exitCode: -1,
-          output: `Could not extract ${input.asarPath} for the bundle self-containment check: ${String(cause)}`,
-        }),
-    });
-    // Keep the existing symlink isolation guard even though the sidecar stage
-    // is hoisted and should be physical. A future package-manager layout change
-    // must not let the probe resolve through the build tree.
-    yield* copyDirectoryPreservingSymlinks(extractedApp, probeApp);
-
-    // Guard the guard: if anything above the probe provides a node_modules, a
-    // missing dependency would resolve there and the check would pass while the
-    // packaged tree is broken.
-    for (const candidate of ancestorNodeModulesPaths(probeApp, path.sep)) {
-      if (yield* fs.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
-        return yield* new BundleNotSelfContainedError({
-          exitCode: -1,
-          output: `Refusing to report success: ${candidate} is visible from the probe directory, so bare imports could resolve outside the packaged tree. Remove or rename it, or point TMPDIR somewhere without one.`,
-        });
-      }
-    }
-
-    const entryPoint = path.join(probeApp, "apps/server/dist/bin.mjs");
-    if (!(yield* fs.exists(entryPoint).pipe(Effect.orElseSucceed(() => false)))) {
-      return yield* new BundleNotSelfContainedError({
-        exitCode: -1,
-        output: `Expected the server entry at ${entryPoint}.`,
-      });
-    }
-
-    // --version exercises the eagerly loaded module graph, which is where a
-    // missing dependency shows up, without starting a server or touching disk
-    // state. It does not cover lazily imported externals: node-pty is checked
-    // by the WSL preflight probe at runtime, while ffi-rs, @ff-labs/fff-node
-    // and the bun adapters are covered by the shared runtime-external closure
-    // and emitted-bundle checks.
-    yield* runCommand(
-      ChildProcess.make(
-        process.execPath,
-        // --no-global-search-paths because clearing NODE_PATH is not enough:
-        // CommonJS resolution still falls back to $HOME/.node_modules,
-        // $HOME/.node_libraries and the install prefix, so a globally installed
-        // copy of a missing dependency would quietly satisfy this check.
-        ["--no-global-search-paths", entryPoint, "--version"],
-        {
-          cwd: probeApp,
-          stdout: "pipe",
-          stderr: "pipe",
-          // NODE_PATH would let a createRequire call inside the bundle resolve
-          // a missing external from outside the packaged tree, which is the
-          // whole thing this is trying to rule out.
-          env: { ...process.env, NODE_PATH: "" },
-        },
-      ),
-      {
-        label: "server sidecar self-containment check (node bin.mjs --version)",
-        verbose: input.verbose,
-      },
-    ).pipe(
-      // Printing a version should be immediate. A regression that blocks (on
-      // stdin, a port, a lock) would otherwise hang release CI until the job
-      // times out with nothing useful in the log.
-      Effect.timeout(BUNDLE_SELF_CHECK_TIMEOUT),
-      Effect.catchTag("TimeoutError", () =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: -1,
-            output: `The packaged bundle did not print its version within ${Duration.toSeconds(BUNDLE_SELF_CHECK_TIMEOUT)}s; it is hanging rather than failing to resolve.`,
-          }),
-        ),
-      ),
-      Effect.catchTag("BuildCommandFailedError", (error) =>
-        Effect.fail(
-          new BundleNotSelfContainedError({
-            exitCode: error.exitCode,
-            output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
-          }),
-        ),
-      ),
-    );
-  },
-);
 
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
@@ -2052,12 +1189,14 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
     updateRepository: Config.string("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
     githubRepository: Config.string("GITHUB_REPOSITORY").pipe(Config.option),
   });
+  // This build script is owned by, and lives in, krls2020/z3 (the Zerops
+  // fork's own repo) — default to it when neither env var overrides the
+  // update repository, rather than silently omitting a publish config.
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
     Option.getOrUndefined(env.githubRepository)?.trim() ||
-    ""
+    "krls2020/z3"
   ).trim();
-  if (!rawRepo) return undefined;
 
   const [owner, repo, ...rest] = rawRepo.split("/");
   if (!owner || !repo || rest.length > 0) return undefined;
@@ -2129,35 +1268,20 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: number | undefined,
-  macPasskeySigning:
-    | {
-        readonly entitlementsPath: string;
-        readonly provisioningProfilePath: string;
-      }
-    | undefined,
-  // Windows only, and false when no Linux node-pty prebuild was bundled: the
-  // sidecar staging skips the archive in that case, and listing a resource
-  // whose source file was never written fails the electron-builder step.
-  wslRuntimeBundled = false,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
-    files: [...DESKTOP_FILE_EXCLUSIONS, ...(platform === "mac" ? MAC_FILE_EXCLUSIONS : [])],
+    files: [...DESKTOP_FILE_EXCLUSIONS],
     directories: {
       buildResources: "apps/desktop/resources",
     },
-    // All platforms keep app.asar fully packed; electron-builder's default
-    // smart unpack extracts native libraries, which loaders find in
-    // app.asar.unpacked. Windows additionally ships the server tree as the
-    // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
-    extraResources: [
-      ...DESKTOP_EXTRA_RESOURCES,
-      ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
-      ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
-    ],
+    // electron-builder's default smart unpack extracts native libraries,
+    // which loaders find in app.asar.unpacked. The desktop no longer embeds a
+    // server, so extraResources is the same on every platform.
+    extraResources: [...DESKTOP_EXTRA_RESOURCES],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
@@ -2188,12 +1312,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
-      ...(macPasskeySigning
-        ? {
-            entitlements: macPasskeySigning.entitlementsPath,
-            provisioningProfile: macPasskeySigning.provisioningProfilePath,
-          }
-        : {}),
     };
   }
 
@@ -2287,609 +1405,76 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   }
 });
 
-// Stage the prebuilt Linux node-pty binary into the packaged app so the WSL
-// backend never compiles on the user's machine. node-pty publishes no Linux
-// prebuilt and the WSL Linux Node can't load the Windows/Electron binary, so the
-// Linux CI job builds pty.node and hands it here. We drop it into the staged
-// node-pty's prebuilds/linux-<arch>/ with a t3code marker the WSL preflight
-// checks (arch + node-pty version; the binary is N-API, hence ABI-stable across
-// Node versions). A missing prebuild is a warning, not an error, so local and
-// non-Windows builds still succeed — they just won't ship a working WSL backend.
-const stageWslNodePtyPrebuild = Effect.fn("stageWslNodePtyPrebuild")(function* (input: {
-  readonly stageAppDir: string;
-  readonly arch: typeof BuildArch.Type;
-  readonly prebuildPath: string | undefined;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-
-  if (input.prebuildPath === undefined) {
-    yield* Effect.logWarning(
-      "[desktop-artifact] No WSL node-pty prebuild provided (--wsl-prebuild / T3CODE_DESKTOP_WSL_PREBUILD); the packaged WSL backend will not start until a Linux pty.node is bundled.",
-    );
-    return;
-  }
-
-  const linuxArch = resolveWslPrebuildArch(input.arch);
-  if (linuxArch === undefined) {
-    yield* Effect.logWarning(
-      `[desktop-artifact] No WSL node-pty prebuild mapping for arch "${input.arch}"; skipping WSL backend bundling.`,
-    );
-    return;
-  }
-
-  const prebuildExists = yield* fs
-    .exists(input.prebuildPath)
-    .pipe(Effect.orElseSucceed(() => false));
-  if (!prebuildExists) {
-    return yield* new WslNodePtyPrebuildMissingError({
-      prebuildPath: input.prebuildPath,
-    });
-  }
-
-  // Resolve through the (pnpm) symlink so we write into the stage's own node-pty
-  // copy, never a shared content-addressable store.
-  const nodePtyLink = path.join(input.stageAppDir, "node_modules", "node-pty");
-  const nodePtyDir = yield* fs.realPath(nodePtyLink).pipe(Effect.orElseSucceed(() => nodePtyLink));
-
-  const manifestPath = path.join(nodePtyDir, "package.json");
-  const pkgRaw = yield* fs.readFileString(manifestPath);
-  const manifest = yield* decodeNodePtyManifest(pkgRaw).pipe(
-    Effect.mapError(
-      (cause) =>
-        new WslNodePtyManifestReadError({
-          manifestPath,
-          cause,
-        }),
-    ),
-  );
-  const nodePtyVersion = manifest.version;
-
-  const prebuildDir = path.join(nodePtyDir, "prebuilds", `linux-${linuxArch}`);
-  yield* fs.makeDirectory(prebuildDir, { recursive: true });
-  yield* fs.copyFile(input.prebuildPath, path.join(prebuildDir, "pty.node"));
-  const markerJson = yield* encodeJsonString({ arch: linuxArch, nodePtyVersion });
-  yield* fs.writeFileString(path.join(prebuildDir, "t3code-wsl-node-pty.json"), `${markerJson}\n`);
-
-  yield* Effect.log(
-    `[desktop-artifact] Staged WSL node-pty prebuild (linux-${linuxArch}, node-pty ${nodePtyVersion}).`,
-  );
-});
-
-// tar reads an `-f` target containing a colon as `host:path` and tries to reach
-// it over rsh, so handing it a Windows drive path (C:\...\wsl-runtime.tar.gz)
-// makes Git for Windows' GNU tar fail with "Cannot connect to C: resolve
-// failed". The staged source tree and the archive both live under the build's
-// stage root, so the target is always expressible relative to tar's cwd.
-export const wslRuntimeArchiveTarTarget = (relativeArchivePath: string): string =>
-  relativeArchivePath.replaceAll("\\", "/");
-
-// `archivePath` is relative to the cwd tar runs in; see wslRuntimeArchiveTarTarget.
-export const buildWslRuntimeArchiveArgs = (
-  archivePath: string = WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE.from,
-): ReadonlyArray<string> => [
-  "-czf",
-  archivePath,
-  ...WSL_RUNTIME_ARCHIVE_EXCLUDED_PREFIXES.map((prefix) => `--exclude=${prefix}*`),
-  ...WSL_RUNTIME_ARCHIVE_CONTENT_ROOTS,
-];
-
-export const parseWslRuntimeArchiveMembers = (listing: string): ReadonlyArray<string> =>
-  listing
-    .split(/\r?\n/)
-    .map((member) => member.replace(/^\.\//, "").replace(/\/$/, ""))
-    .filter((member) => member.length > 0);
-
-export const stageWslRuntimeArchive = Effect.fn("stageWslRuntimeArchive")(function* (input: {
-  readonly sourceDir: string;
-  readonly archivePath: string;
-  readonly hashPath: string;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  yield* fs.makeDirectory(path.dirname(input.archivePath), { recursive: true });
-  const tarTarget = wslRuntimeArchiveTarTarget(path.relative(input.sourceDir, input.archivePath));
-  yield* runCommand(
-    ChildProcess.make("tar", buildWslRuntimeArchiveArgs(tarTarget), {
-      cwd: input.sourceDir,
-    }),
-    { label: "tar WSL runtime", verbose: false },
-  );
-  const hash = NodeCrypto.createHash("sha256");
-  yield* fs
-    .stream(input.archivePath)
-    .pipe(Stream.runForEach((chunk) => Effect.sync(() => hash.update(chunk))));
-  const digest = hash.digest("hex");
-  yield* fs.writeFileString(input.hashPath, `${digest}\n`);
-  yield* Effect.log(
-    `[desktop-artifact] Staged compressed WSL runtime at ${input.archivePath} (${digest}).`,
-  );
-});
-
-// Stage and pack the Windows server sidecar: the bundled server plus a hoisted
-// install of only its runtime-external/native dependency closure for win32 and
-// WSL Linux. The Windows primary runs from the archive through the asar-aware
-// ELECTRON_RUN_AS_NODE runtime; enabling WSL extracts it to a real directory.
-// Shipping one packed archive instead of thousands of loose files is what
-// makes the NSIS install/update fast.
-export const packWindowsServerAsar = Effect.fn("packWindowsServerAsar")(function* (input: {
-  readonly sourceDir: string;
-  readonly asarPath: string;
-  readonly arch: typeof BuildArch.Type;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  yield* Effect.tryPromise({
-    try: () =>
-      createPackageWithOptions(input.sourceDir, input.asarPath, {
-        dot: true,
-        unpack: WINDOWS_SERVER_ASAR_UNPACK_GLOB,
-        globOptions: { ignore: resolveWindowsServerAsarIgnoreGlobs(input.arch) },
-      }),
-    catch: (cause) => new WindowsServerSidecarPackError({ asarPath: input.asarPath, cause }),
-  });
-  const unpackedDirPath = `${input.asarPath}.unpacked`;
-  if (!(yield* fs.exists(unpackedDirPath))) {
-    return yield* new WindowsServerSidecarPackError({
-      asarPath: input.asarPath,
-      cause: new Error(`expected native binaries at ${unpackedDirPath}, but none were unpacked`),
-    });
-  }
-});
-
-export const stageWindowsServerSidecar = Effect.fn("stageWindowsServerSidecar")(function* (input: {
-  readonly stageRoot: string;
+// Builds (unless skipBuild) the hosted-static apps/web bundle — the same
+// build the Vercel-hosted web app uses (VITE_HOSTED_APP_CHANNEL set,
+// VITE_HTTP_URL/VITE_WS_URL unset so isHostedStaticApp() is true and the
+// client never points at a local backend) — then stamps its brand assets and
+// copies it into the staged app so electron-builder's extraResources entry
+// (DESKTOP_EXTRA_RESOURCES) lands it at resourcesPath/web/**.
+// DesktopEnvironment.ts's resolveResourcePathCandidates() is what
+// DesktopApp.ts's assets.resolveResourcePath("web/index.html") and
+// ElectronProtocol.ts's serveStaticFile resolve it through at runtime.
+export const stageHostedWebBundle = Effect.fn("stageHostedWebBundle")(function* (input: {
   readonly repoRoot: string;
-  readonly serverDistDir: string;
-  readonly arch: typeof BuildArch.Type;
+  readonly webDistDir: string;
+  readonly stageWebResourcesDir: string;
   readonly appVersion: string;
-  readonly runtimeExternalDependencies: Record<string, string>;
-  readonly fffNodeVersion: string;
-  readonly allowBuilds: Record<string, boolean>;
-  readonly patchedDependencies: Record<string, string>;
-  readonly overrides: Record<string, string>;
-  readonly wslPrebuildPath: string | undefined;
-  readonly asarPath: string;
-  readonly wslRuntimeArchivePath: string;
-  readonly wslRuntimeArchiveHashPath: string;
+  readonly webAssetBrand: WebAssetBrand;
+  readonly skipBuild: boolean;
   readonly verbose: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const serverStageDir = path.join(input.stageRoot, "server");
-  yield* fs.makeDirectory(path.join(serverStageDir, "apps/server"), { recursive: true });
-  yield* fs.copy(input.serverDistDir, path.join(serverStageDir, "apps/server/dist"));
-
-  const sidecarDependencies = {
-    ...input.runtimeExternalDependencies,
-    // The sidecar serves two processes: the Windows primary loads win32
-    // natives, and the WSL backend loads the matching Linux natives (fff via
-    // ffi-rs) from the extracted copy of this same tree.
-    ...resolveFffNativeDependencies("win", input.arch, input.fffNodeVersion),
-    ...resolveFffNativeDependencies("linux", input.arch, input.fffNodeVersion),
-  };
-  const sidecarPatchedDependencies = createStagePatchedDependencies(
-    input.patchedDependencies,
-    sidecarDependencies,
-  );
-  const sidecarPackageJson = {
-    name: "t3code-server",
-    version: input.appVersion,
-    private: true,
-    packageManager: rootPackageJson.packageManager,
-    dependencies: sidecarDependencies,
-  };
-  const sidecarPackageJsonString = yield* encodeJsonString(sidecarPackageJson);
-  yield* fs.writeFileString(
-    path.join(serverStageDir, "package.json"),
-    `${sidecarPackageJsonString}\n`,
-  );
-  const sidecarWorkspaceConfig = createStageWorkspaceConfig({
-    platform: "win",
-    arch: input.arch,
-    allowBuilds: input.allowBuilds,
-    patchedDependencies: sidecarPatchedDependencies,
-    overrides: input.overrides,
-    linuxServerBackend: true,
-  });
-  const sidecarWorkspaceConfigString = yield* encodeStageWorkspaceConfig(sidecarWorkspaceConfig);
-  yield* fs.writeFileString(
-    path.join(serverStageDir, "pnpm-workspace.yaml"),
-    sidecarWorkspaceConfigString,
-  );
-  if (Object.keys(sidecarPatchedDependencies).length > 0) {
-    yield* fs.copy(path.join(input.repoRoot, "patches"), path.join(serverStageDir, "patches"));
-  }
-
-  yield* Effect.log("[desktop-artifact] Installing server sidecar runtime externals...");
-  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
-  yield* runCommand(
-    ChildProcess.make(installCommand.command, installCommand.args, {
-      cwd: serverStageDir,
-      shell: installCommand.shell,
-    }),
-    { label: "vp install --prod (server sidecar)", verbose: input.verbose },
-  );
-
-  yield* stageWslNodePtyPrebuild({
-    stageAppDir: serverStageDir,
-    arch: input.arch,
-    prebuildPath: input.wslPrebuildPath,
-  });
-  // Skip the archive entirely rather than shipping one the install script must
-  // extract and reject on every launch. The desktop app treats a missing
-  // archive as "no WSL-local runtime" and goes straight to the mounted tree.
-  if (bundlesWslRuntime({ arch: input.arch, prebuildPath: input.wslPrebuildPath })) {
-    yield* stageWslRuntimeArchive({
-      sourceDir: serverStageDir,
-      archivePath: input.wslRuntimeArchivePath,
-      hashPath: input.wslRuntimeArchiveHashPath,
-    });
-  }
-
-  yield* Effect.log("[desktop-artifact] Packing server.asar...");
-  yield* fs.makeDirectory(path.dirname(input.asarPath), { recursive: true });
-  yield* packWindowsServerAsar({
-    sourceDir: serverStageDir,
-    asarPath: input.asarPath,
-    arch: input.arch,
-  });
-  const packedStat = yield* fs.stat(input.asarPath);
-  yield* Effect.log(
-    `[desktop-artifact] Packed server.asar (${String(packedStat.size)} bytes) + unpacked natives.`,
-  );
-});
-
-function collectUnpackedAsarFiles(
-  directory: DirectoryRecord,
-  parentPath = "",
-  output: string[] = [],
-): readonly string[] {
-  for (const [name, entry] of Object.entries(directory.files)) {
-    const entryPath = parentPath.length === 0 ? name : `${parentPath}/${name}`;
-    if ("files" in entry) {
-      collectUnpackedAsarFiles(entry, entryPath, output);
-    } else if (entry.unpacked) {
-      output.push(entryPath);
-    }
-  }
-  return output;
-}
-
-const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(function* (root: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const pendingDirectories = [root];
-  let count = 0;
-
-  while (pendingDirectories.length > 0) {
-    const directory = pendingDirectories.pop();
-    if (directory === undefined) break;
-    const entries = yield* fs.readDirectory(directory);
-    for (const entry of entries) {
-      const entryPath = path.join(directory, entry);
-      const stat = yield* fs.stat(entryPath);
-      if (stat.type === "Directory") {
-        pendingDirectories.push(entryPath);
-      } else if (stat.type === "File") {
-        count += 1;
-      }
-    }
-  }
-
-  return count;
-});
-
-export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
-  "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
-)(function* (input: {
-  readonly packagedAppDir: string;
-  readonly asarPath: string;
-  readonly appExecutableName: string;
-  readonly targetArch: typeof BuildArch.Type;
-  readonly verbose: boolean;
-}) {
-  const hostPlatform = yield* HostProcessPlatform;
-  const hostArchitecture = yield* HostProcessArchitecture;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const executablePath = path.join(input.packagedAppDir, input.appExecutableName);
-  const executableStat = yield* fs.stat(executablePath).pipe(Effect.orElseSucceed(() => null));
-  if (executableStat?.type !== "File") {
-    return yield* new WindowsPrimaryNativeProbeError({
-      executablePath,
-      exitCode: -1,
-      output: "The unpacked application does not contain its expected primary executable.",
-    });
-  }
-  if (hostPlatform !== "win32" || hostArchitecture !== input.targetArch) return;
-
-  const probeRoot = yield* fs.makeTempDirectoryScoped({
-    prefix: "t3code-windows-primary-native-probe-",
-  });
-  const fffEntryPath = path.join(
-    input.asarPath,
-    "node_modules/@ff-labs/fff-node/dist/src/index.js",
-  );
-  const probeEnv = { ...process.env };
-  delete probeEnv.ELECTRON_NO_ASAR;
-  delete probeEnv.NODE_OPTIONS;
-
-  yield* runCommand(
-    ChildProcess.make(
-      executablePath,
-      [
-        "--no-global-search-paths",
-        "--input-type=module",
-        "--eval",
-        WINDOWS_PRIMARY_FFF_PROBE_SOURCE,
-        fffEntryPath,
-        probeRoot,
-      ],
-      {
-        cwd: input.packagedAppDir,
-        stdout: "pipe",
-        stderr: "pipe",
+  if (!input.skipBuild) {
+    yield* Effect.log("[desktop-artifact] Building hosted-static web bundle...");
+    const spawnCommand = yield* resolveSpawnCommand("vp", [
+      "run",
+      "--filter",
+      "@t3tools/web",
+      "build",
+    ]);
+    yield* runCommand(
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        cwd: input.repoRoot,
+        shell: spawnCommand.shell,
         env: {
-          ...probeEnv,
-          ELECTRON_RUN_AS_NODE: "1",
-          NODE_PATH: "",
+          ...process.env,
+          VITE_HOSTED_APP_CHANNEL: resolveDesktopUpdateChannel(input.appVersion),
+          // isHostedStaticApp() treats a configured backend URL as "not
+          // hosted"; scrub both explicitly so a developer's .env/.env.local
+          // cannot leak a local backend target into the packaged bundle.
+          VITE_HTTP_URL: "",
+          VITE_WS_URL: "",
         },
-      },
-    ),
-    {
-      label: "Windows primary fff native-load probe",
-      verbose: input.verbose,
-    },
-  ).pipe(
-    Effect.timeout(WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT),
-    Effect.catchTags({
-      TimeoutError: () =>
-        Effect.fail(
-          new WindowsPrimaryNativeProbeError({
-            executablePath,
-            exitCode: -1,
-            output: `The native-load probe did not finish within ${Duration.toSeconds(WINDOWS_PRIMARY_NATIVE_PROBE_TIMEOUT)}s.`,
-          }),
-        ),
-      BuildCommandFailedError: (error) =>
-        Effect.fail(
-          new WindowsPrimaryNativeProbeError({
-            executablePath,
-            exitCode: error.exitCode,
-            output: `${error.stderrTail ?? ""}${error.stdoutTail ?? ""}`.trim(),
-          }),
-        ),
-    }),
-  );
-});
-
-export const validateWindowsPackagedPayload = Effect.fn(
-  "desktopArtifact.validateWindowsPackagedPayload",
-)(function* (input: {
-  readonly stageDistDir: string;
-  readonly appExecutableName: string;
-  readonly targetArch: typeof BuildArch.Type;
-  readonly expectWslRuntime?: boolean;
-  readonly fileLimit?: number;
-  readonly verbose?: boolean;
-}) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const fileLimit = input.fileLimit ?? WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
-  const isFile = (filePath: string) =>
-    fs.stat(filePath).pipe(
-      Effect.map((stat) => stat.type === "File"),
-      Effect.orElseSucceed(() => false),
-    );
-  const stageEntries = yield* fs.readDirectory(input.stageDistDir);
-  let packagedAppDir: string | undefined;
-
-  for (const entry of stageEntries) {
-    if (!entry.endsWith("-unpacked")) continue;
-    const candidate = path.join(input.stageDistDir, entry);
-    const stat = yield* fs.stat(candidate).pipe(Effect.orElseSucceed(() => null));
-    if (stat?.type === "Directory") {
-      packagedAppDir = candidate;
-      break;
-    }
-  }
-
-  if (packagedAppDir === undefined) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "packaged-app-missing",
-      packagedAppDir: path.join(input.stageDistDir, "win-unpacked"),
-    });
-  }
-
-  const resourcesDir = path.join(packagedAppDir, "resources");
-  const asarPath = path.join(resourcesDir, WINDOWS_SERVER_ASAR_RESOURCE);
-  if (!(yield* fs.exists(asarPath).pipe(Effect.orElseSucceed(() => false)))) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "sidecar-missing",
-      packagedAppDir,
-      missingFiles: [WINDOWS_SERVER_ASAR_RESOURCE],
-    });
-  }
-
-  const unpackedFiles = yield* Effect.try({
-    try: () => {
-      // The entry lookup proves the archive contains the server executable,
-      // while the single header walk identifies every file ASAR redirects to
-      // the unpacked sibling at runtime.
-      // @electron/asar resolves entry names using the host path separator.
-      // POSIX separators work on Linux/macOS but fail on Windows even when the
-      // entry is present in the archive.
-      statFile(asarPath, path.join("apps", "server", "dist", "bin.mjs"));
-      return [...collectUnpackedAsarFiles(getRawHeader(asarPath).header)].sort();
-    },
-    catch: (cause) =>
-      new WindowsPackagedPayloadValidationError({
-        reason: "sidecar-invalid",
-        packagedAppDir,
-        cause,
       }),
-  });
-  if (unpackedFiles.length === 0) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "sidecar-invalid",
-      packagedAppDir,
-      cause: new Error("server.asar does not declare any unpacked native files"),
-    });
-  }
-
-  const missingFiles: string[] = [];
-  for (const unpackedFile of unpackedFiles) {
-    const unpackedPath = path.join(
-      resourcesDir,
-      `${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked`,
-      ...unpackedFile.split("/"),
+      { label: "vp run --filter @t3tools/web build", verbose: input.verbose },
     );
-    if (!(yield* isFile(unpackedPath))) {
-      missingFiles.push(`${WINDOWS_SERVER_ASAR_RESOURCE}.unpacked/${unpackedFile}`);
-    }
   }
-  if (missingFiles.length > 0) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "unpacked-native-missing",
-      packagedAppDir,
-      missingFiles,
+
+  const webBundleEntry = path.join(input.webDistDir, "index.html");
+  if (!(yield* fs.exists(webBundleEntry))) {
+    return yield* new MissingDesktopBuildInputError({
+      artifact: "web-dist",
+      artifactPath: webBundleEntry,
+      buildCommand: "vp run --filter @t3tools/web build",
     });
   }
 
-  const resourceMonitorPath = path.join(
-    resourcesDir,
-    "resource-monitor",
-    resourceMonitorExecutableName("win"),
-  );
-  if (!(yield* isFile(resourceMonitorPath))) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "resource-monitor-missing",
-      packagedAppDir,
-      missingFiles: ["resource-monitor/t3-resource-monitor.exe"],
-    });
-  }
+  // applyWebBrandAssets resolves both sides of the copy relative to the repo
+  // root itself, so this must stay a repo-relative path, not input.webDistDir.
+  yield* applyWebBrandAssets(input.webAssetBrand, "apps/web/dist");
+  yield* Effect.log(`[desktop-artifact] Applied ${input.webAssetBrand} web client branding.`);
+  yield* validateBundledClientAssets(input.webDistDir);
 
-  const wslArchivePath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_NAME);
-  const wslArchiveHashPath = path.join(resourcesDir, WSL_RUNTIME_ARCHIVE_HASH_NAME);
-  const [hasWslArchive, hasWslArchiveHash] = yield* Effect.all([
-    isFile(wslArchivePath),
-    isFile(wslArchiveHashPath),
-  ]);
-  if (input.expectWslRuntime === true && (!hasWslArchive || !hasWslArchiveHash)) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "wsl-runtime-missing",
-      packagedAppDir,
-      missingFiles: [
-        ...(hasWslArchive ? [] : [WSL_RUNTIME_ARCHIVE_NAME]),
-        ...(hasWslArchiveHash ? [] : [WSL_RUNTIME_ARCHIVE_HASH_NAME]),
-      ],
-    });
-  }
-  if (hasWslArchive !== hasWslArchiveHash) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "wsl-runtime-missing",
-      packagedAppDir,
-      missingFiles: [hasWslArchive ? WSL_RUNTIME_ARCHIVE_HASH_NAME : WSL_RUNTIME_ARCHIVE_NAME],
-    });
-  }
-  if (hasWslArchive && hasWslArchiveHash) {
-    const invalidWslRuntime = (cause: unknown) =>
-      new WindowsPackagedPayloadValidationError({
-        reason: "wsl-runtime-invalid",
-        packagedAppDir,
-        cause,
-      });
-    const recordedHash = yield* fs
-      .readFileString(wslArchiveHashPath)
-      .pipe(Effect.mapError(invalidWslRuntime));
-    const expectedHash = recordedHash.trim().toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(expectedHash)) {
-      return yield* invalidWslRuntime(new Error("invalid WSL runtime SHA-256 sidecar"));
-    }
-    const archiveHash = NodeCrypto.createHash("sha256");
-    yield* fs.stream(wslArchivePath).pipe(
-      Stream.runForEach((chunk) => Effect.sync(() => archiveHash.update(chunk))),
-      Effect.mapError(invalidWslRuntime),
-    );
-    const actualHash = archiveHash.digest("hex");
-    if (actualHash !== expectedHash) {
-      return yield* invalidWslRuntime(
-        new Error(`WSL runtime SHA-256 mismatch: expected ${expectedHash}, got ${actualHash}`),
-      );
-    }
-
-    const listing = yield* spawnAndCollectOutput(
-      ChildProcess.make("tar", ["-tzf", WSL_RUNTIME_ARCHIVE_NAME], {
-        cwd: resourcesDir,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      }),
-    ).pipe(Effect.mapError(invalidWslRuntime));
-    if (listing.exitCode !== 0) {
-      return yield* invalidWslRuntime(
-        new Error(`tar could not list WSL runtime archive: ${listing.stderr.trim()}`),
-      );
-    }
-    const members = parseWslRuntimeArchiveMembers(listing.stdout);
-    const forbiddenMember = members.find((member) =>
-      WSL_RUNTIME_ARCHIVE_EXCLUDED_PREFIXES.some((prefix) => member.startsWith(prefix)),
-    );
-    if (forbiddenMember !== undefined) {
-      return yield* invalidWslRuntime(
-        new Error(`WSL runtime archive contains forbidden member ${forbiddenMember}`),
-      );
-    }
-    const wslArch = resolveWslPrebuildArch(input.targetArch);
-    const requiredMembers = [
-      "apps/server/dist/bin.mjs",
-      "node_modules/node-pty/package.json",
-      ...(wslArch === undefined
-        ? []
-        : [
-            `node_modules/node-pty/prebuilds/linux-${wslArch}/pty.node`,
-            `node_modules/node-pty/prebuilds/linux-${wslArch}/t3code-wsl-node-pty.json`,
-          ]),
-    ];
-    const missingMembers = requiredMembers.filter((member) => !members.includes(member));
-    if (missingMembers.length > 0) {
-      return yield* new WindowsPackagedPayloadValidationError({
-        reason: "wsl-runtime-invalid",
-        packagedAppDir,
-        missingFiles: missingMembers,
-        cause: new Error("WSL runtime archive is incomplete"),
-      });
-    }
-  }
-
-  const fileCount = yield* countPayloadFiles(packagedAppDir);
-  if (fileCount > fileLimit) {
-    return yield* new WindowsPackagedPayloadValidationError({
-      reason: "file-limit-exceeded",
-      packagedAppDir,
-      fileCount,
-      fileLimit,
-    });
-  }
-
-  yield* verifyWindowsPrimaryFffNativeLoad({
-    packagedAppDir,
-    asarPath,
-    appExecutableName: input.appExecutableName,
-    targetArch: input.targetArch,
-    verbose: input.verbose ?? false,
-  });
-
-  yield* verifyPackagedBundleIsSelfContained({
-    asarPath,
-    verbose: input.verbose ?? false,
-  });
-
+  yield* fs
+    .remove(input.stageWebResourcesDir, { recursive: true, force: true })
+    .pipe(Effect.ignore);
+  yield* fs.makeDirectory(path.dirname(input.stageWebResourcesDir), { recursive: true });
+  yield* fs.copy(input.webDistDir, input.stageWebResourcesDir);
   yield* Effect.log(
-    `[desktop-artifact] Validated Windows payload (${String(fileCount)} files, ${String(unpackedFiles.length)} sidecar natives).`,
+    `[desktop-artifact] Staged hosted web bundle at ${input.stageWebResourcesDir}.`,
   );
-  return { packagedAppDir, fileCount, unpackedFiles } as const;
 });
 
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
@@ -2914,13 +1499,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   const electronVersion = desktopPackageJson.dependencies.electron;
 
-  const serverDependencies = serverPackageJson.dependencies;
-  if (!serverDependencies || Object.keys(serverDependencies).length === 0) {
-    return yield* new MissingServerProductionDependenciesError({
-      manifestPath: "apps/server/package.json",
-    });
-  }
-
   const resolvedOverrides = yield* Effect.try({
     try: () => resolveCatalogDependencies(workspaceOverrides, workspaceCatalog, "apps/desktop"),
     catch: (cause) =>
@@ -2931,18 +1509,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       }),
   });
 
-  const resolvedServerDependencies = yield* Effect.try({
-    try: () => resolveCatalogDependencies(serverDependencies, workspaceCatalog, "apps/server"),
-    catch: (cause) =>
-      new DesktopBuildDependencyResolutionError({
-        kind: "server-production",
-        manifestPath: "apps/server/package.json",
-        cause,
-      }),
-  });
-  const resolvedServerRuntimeExternalDependencies = selectCliRuntimeExternalDependencies(
-    resolvedServerDependencies,
-  );
   const resolvedDesktopRuntimeDependencies = yield* Effect.try({
     try: () => resolveDesktopRuntimeDependencies(desktopPackageJson.dependencies, workspaceCatalog),
     catch: (cause) =>
@@ -2963,15 +1529,20 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   const stageAppDir = path.join(stageRoot, "app");
   const stageResourcesDir = path.join(stageAppDir, "apps/desktop/resources");
+  const stageWebResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources/web");
   const distDirs = {
     desktopDist: path.join(repoRoot, "apps/desktop/dist-electron"),
     desktopResources: path.join(repoRoot, "apps/desktop/resources"),
     serverDist: path.join(repoRoot, "apps/server/dist"),
+    webDist: path.join(repoRoot, "apps/web/dist"),
   };
-  const bundledClientEntry = path.join(distDirs.serverDist, "client/index.html");
 
   if (!options.skipBuild) {
-    yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
+    // Still builds `t3` (apps/server) — it is no longer staged into the
+    // packaged desktop app, but the self-containment scan below needs its
+    // bundled output to check against, and `t3` ships as its own npm CLI
+    // independent of desktop packaging.
+    yield* Effect.log("[desktop-artifact] Building desktop app and server bundle...");
     const spawnCommand = yield* resolveSpawnCommand("vp", ["run", "build:desktop"]);
     yield* runCommand(
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
@@ -3058,23 +1629,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }
   }
 
-  if (!(yield* fs.exists(bundledClientEntry))) {
-    return yield* new MissingDesktopBuildInputError({
-      artifact: "bundled-server-client",
-      artifactPath: bundledClientEntry,
-      buildCommand: "vp run build:desktop",
-    });
-  }
-
-  const webAssetBrand = resolveDesktopWebAssetBrand(appVersion);
-  yield* applyWebBrandAssets(webAssetBrand, "apps/server/dist/client");
-  yield* Effect.log(`[desktop-artifact] Applied ${webAssetBrand} web client branding.`);
-  yield* validateBundledClientAssets(path.dirname(bundledClientEntry));
-
   yield* fs.makeDirectory(path.join(stageAppDir, "apps/desktop"), { recursive: true });
-  if (options.platform !== "win") {
-    yield* fs.makeDirectory(path.join(stageAppDir, "apps/server"), { recursive: true });
-  }
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
@@ -3085,11 +1640,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       resolveDesktopUpdateChannel(appVersion),
       options.verbose,
     );
-  }
-  // On Windows the server tree ships in the server.asar sidecar instead of
-  // app.asar (see stageWindowsServerSidecar), so the app stage omits it.
-  if (options.platform !== "win") {
-    yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
   }
   yield* stageResourceMonitor({
     repoRoot,
@@ -3114,66 +1664,24 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
-  const configuredMacPasskeySigning =
-    options.platform === "mac" && options.signed
-      ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
-          catch: MacPasskeySigningConfigurationResolutionError.fromCause,
-        })
-      : undefined;
-  const macPasskeySigning = configuredMacPasskeySigning
-    ? {
-        ...configuredMacPasskeySigning,
-        provisioningProfilePath: path.resolve(
-          repoRoot,
-          configuredMacPasskeySigning.provisioningProfilePath,
-        ),
-      }
-    : undefined;
-  const macEntitlementsPath = macPasskeySigning
-    ? path.join(stageAppDir, "entitlements.mac.plist")
-    : undefined;
-  if (macPasskeySigning && macEntitlementsPath) {
-    if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
-      return yield* new MacProvisioningProfileNotFoundError({
-        provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
-      });
-    }
-    yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
-  }
+  const webAssetBrand = resolveDesktopWebAssetBrand(appVersion);
+  yield* stageHostedWebBundle({
+    repoRoot,
+    webDistDir: distDirs.webDist,
+    stageWebResourcesDir,
+    appVersion,
+    webAssetBrand,
+    skipBuild: options.skipBuild,
+    verbose: options.verbose,
+  });
 
-  // Windows splits dependencies per process: app.asar carries only the
-  // desktop main-process runtime deps, while the server bundle's deps live in
-  // the server.asar sidecar (see stageWindowsServerSidecar). macOS adds only
-  // server packages that remain external to its merged app.asar. Linux retains
-  // its existing full dependency tree.
-  const stageDependencies =
-    options.platform === "win"
-      ? { ...resolvedDesktopRuntimeDependencies }
-      : options.platform === "mac"
-        ? resolveMacStageDependencies({
-            serverDependencies: resolvedServerDependencies,
-            desktopDependencies: resolvedDesktopRuntimeDependencies,
-            arch: options.arch,
-            fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
-          })
-        : {
-            ...resolvedServerDependencies,
-            ...resolvedDesktopRuntimeDependencies,
-            ...resolveFffNativeDependencies(
-              options.platform,
-              options.arch,
-              serverPackageJson.dependencies["@ff-labs/fff-node"],
-            ),
-          };
+  // The desktop no longer embeds a server, so every platform installs the
+  // same dependency set: just the desktop main-process runtime deps.
+  const stageDependencies = { ...resolvedDesktopRuntimeDependencies };
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
   );
-  const windowsServerAsarPath =
-    options.platform === "win"
-      ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
-      : undefined;
   const stagePackageJson: StagePackageJson = {
     name: "t3code",
     version: appVersion,
@@ -3191,13 +1699,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath
-        ? {
-            entitlementsPath: macEntitlementsPath,
-            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
-          }
-        : undefined,
-      bundlesWslRuntime({ arch: options.arch, prebuildPath: options.wslPrebuild }),
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3233,34 +1734,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     }),
     { label: "vp install --prod", verbose: options.verbose },
   );
-  yield* stageClerkPasskeyNativeBinaries(stageAppDir, options.platform, options.arch);
-
-  // WSL is Windows-only, so only the Windows artifact carries the server
-  // sidecar (which embeds the Linux node-pty prebuild); other platforms
-  // ignore the prebuild input.
-  if (options.platform === "win" && windowsServerAsarPath) {
-    yield* stageWindowsServerSidecar({
-      stageRoot,
-      repoRoot,
-      serverDistDir: distDirs.serverDist,
-      arch: options.arch,
-      appVersion,
-      runtimeExternalDependencies: resolvedServerRuntimeExternalDependencies,
-      fffNodeVersion: serverPackageJson.dependencies["@ff-labs/fff-node"],
-      allowBuilds: workspaceAllowBuilds,
-      patchedDependencies: workspacePatchedDependencies,
-      overrides: resolvedOverrides,
-      wslPrebuildPath: options.wslPrebuild,
-      asarPath: windowsServerAsarPath,
-      wslRuntimeArchivePath: path.join(stageAppDir, WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE.from),
-      wslRuntimeArchiveHashPath: path.join(
-        stageAppDir,
-        WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE.from,
-      ),
-
-      verbose: options.verbose,
-    });
-  }
 
   // electron-builder treats several set-but-empty variables (e.g. CSC_LINK="")
   // as enabled, so copy the host env and scrub empty values instead of relying
@@ -3336,31 +1809,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       distPath: stageDistDir,
       platform: options.platform,
       arch: options.arch,
-    });
-  }
-
-  // Prove the packaged bundle is self-contained by loading it the way the WSL
-  // backend does, rather than by reasoning about the emitted source.
-  //
-  // Static analysis kept getting this wrong here. Scanning for bare imports
-  // matched specifiers inside effect's JSDoc examples and inside ajv's runtime
-  // codegen template, and asserting that one sentinel package was inlined
-  // missed a build that inlined `effect` while leaving `yaml` external. Node's
-  // resolver has no such ambiguity: it either finds every import or it does not.
-  //
-  // Only Windows unpacks anything; macOS and Linux keep the whole tree inside
-  // the app asar. Windows validates and executes the separately packed server
-  // sidecar after electron-builder copies it into the final payload.
-  if (options.platform === "win") {
-    yield* validateWindowsPackagedPayload({
-      stageDistDir,
-      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
-      targetArch: options.arch,
-      expectWslRuntime: bundlesWslRuntime({
-        arch: options.arch,
-        prebuildPath: options.wslPrebuild,
-      }),
-      verbose: options.verbose,
     });
   }
 
@@ -3441,12 +1889,6 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   mockUpdateServerPort: Flag.integer("mock-update-server-port").pipe(
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription("Mock update server port (env: T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
-    Flag.optional,
-  ),
-  wslPrebuild: Flag.string("wsl-prebuild").pipe(
-    Flag.withDescription(
-      "Path to a prebuilt Linux node-pty (pty.node) for the target arch, staged for the WSL backend (env: T3CODE_DESKTOP_WSL_PREBUILD).",
-    ),
     Flag.optional,
   ),
 }).pipe(
