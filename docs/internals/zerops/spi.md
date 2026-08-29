@@ -126,22 +126,23 @@ string equal to (or path-prefixed by) `process.cwd()`, `os.homedir()`, or `os.tm
 `<CWD>`/`<HOME>`/`<TMPDIR>`, longest path first.
 
 Current set: 4 Claude fixtures (real recordings, SDK 0.3.250 / CLI 2.1.251 / `claude-opus-5[1m]`)
-+ 1 Codex fixture (`multi-agent-wire`, converted once from the upstream ported-zone test fixture
-`testFixtures/codexMultiAgentWire.json`, `synthetic: false`) + 3 live baselines (cursor, grok,
-opencode, each `synthetic: true`) = 8 goldens total.
+
+- 1 Codex fixture (`multi-agent-wire`, converted once from the upstream ported-zone test fixture
+  `testFixtures/codexMultiAgentWire.json`, `synthetic: false`) + 3 live baselines (cursor, grok,
+  opencode, each `synthetic: true`) = 8 goldens total.
 
 ## 8. Porting checklist
 
 1. **Import the wire packages** — regenerate `imported.lock` from the new upstream ref: `imported-lock --write --upstream <ref>` (`scripts/imported-lock.ts`); it refuses to write if HEAD has diverged from the ref for either imported path (an import must stay byte-identical).
 2. **Port the driver commits** behind the SPI, minimally — the ported zone (`provider/**`, `packages/effect-codex-app-server/**`, `packages/effect-acp/**`) must still import nothing matching `zerops`.
 3. **Run the goldens** (`replay/goldens.test.ts`) **+ the zone test** (`scripts/z3-zone-architecture.test.ts`) **+ package typecheck**.
-4. If a golden diverges: fix `toolCall.ts`'s readers or the typed capabilities (§6) to match the new driver shape — **never edit `apps/server/src/zerops/**` to chase a driver change**; that tree only ever reads `event.toolCall`, never `payload.data`.
+4. If a golden diverges: fix `toolCall.ts`'s readers or the typed capabilities (§6) to match the new driver shape — **never edit `apps/server/src/zerops/**`to chase a driver change**; that tree only ever reads`event.toolCall`, never `payload.data`.
 5. Add a `compat.md` row for the new port.
 6. Bump `PROVIDER_RUNTIME_SPI_VERSION` (§2) only when the change alters what owned code may depend on — not for every port.
 
 ## 9. Known gaps
 
-- `orchestration/Layers/ProviderRuntimeIngestion.ts` and `CheckpointReactor.ts` still call `ProviderService` directly (`ProviderRuntimeIngestion.ts:32,896,2071`), not through `ProviderRuntimeEventBus` — the bus's own doc comment names this "a future slice". The zone architecture test's owned-product scan covers only `apps/server/src/zerops/**`, so this direct import is not caught by any test today.
+- `orchestration/Layers/ProviderRuntimeIngestion.ts` and `CheckpointReactor.ts` read `ProviderService.streamEvents` directly (`ProviderRuntimeIngestion.ts:32,896,2071`) — **by design, not a gap**: orchestration is owned core, the service tags are its sanctioned seam (`fork.md` §3), durable ingestion must sit on the raw lossless stream before any observational fan-out, and it needs no `toolCall`. The bus + enrichment are the owned-product boundary (`zerops/**`), which is exactly what the zone test scans. Revisit only if orchestration ever needs the enriched view.
 - Codex's collab-agent synthesis (`CodexSessionRuntime`'s child-registration step) is not replayed — `replay/codexReplay.ts` addresses each captured notification at its own wire `threadId` directly rather than through that synthesis path (covered elsewhere by `CodexCollabWire.test.ts`/`CodexCollabRuntime.integration.test.ts`).
 - Claude's `onUserDialog` control line is not replayed — `replay/claudeReplay.ts` implements only `canUseTool`; a fixture with an `onUserDialog` line throws naming the gap.
 - Codex non-MCP tool items (`commandExecution`, `fileChange`, `collabAgentToolCall`, `webSearch`, ...) are `unrecognized` by design — the Codex reader only decodes the `mcpToolCall` item variant.
