@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
-import type { ZeropsAgentAuth, ZeropsAgentAuthSnapshot } from "@t3tools/contracts";
+import type {
+  ZeropsAgentAuth,
+  ZeropsAgentAuthSnapshot,
+  ZeropsAgentLoginState,
+} from "@t3tools/contracts";
 
 import { ZeropsAgentAuthCard } from "./ZeropsAgentAuthCard";
 
@@ -201,5 +205,149 @@ describe("ZeropsAgentAuthCard", () => {
     expect(html).not.toContain("Sign in to Claude");
     expect(html).toContain('disabled=""');
     expect(html).toContain("Checking…");
+  });
+});
+
+const loginState = (
+  overrides: Partial<ZeropsAgentLoginState> & { phase: ZeropsAgentLoginState["phase"] },
+): ZeropsAgentLoginState => ({
+  terminalId: "agent-login-claude-code",
+  startedAt: new Date("2026-08-29T12:00:00.000Z") as unknown as ZeropsAgentLoginState["startedAt"],
+  ...overrides,
+});
+
+describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)", () => {
+  it("shows a disabled 'Signing in…' placeholder in the menu phase, no sign-in button", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({ agentId: "claude-code", login: loginState({ phase: "menu" }) }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+
+    expect(html).not.toContain("Sign in to Claude");
+    expect(html).toContain('disabled=""');
+    expect(html).toContain("Signing in…");
+    expect(html).toContain("Choosing");
+  });
+
+  it("shows an Open sign-in link and a Copy link button once a url is known", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({
+            agentId: "claude-code",
+            login: loginState({
+              phase: "awaiting-browser",
+              url: "https://claude.com/cai/oauth/authorize",
+            }),
+          }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+
+    expect(html).toContain('href="https://claude.com/cai/oauth/authorize"');
+    expect(html).toContain('target="_blank"');
+    expect(html).toContain('rel="noopener noreferrer"');
+    expect(html).toContain("Open sign-in link");
+    expect(html).toContain("Copy link");
+  });
+
+  it("also shows a Copy code button for codex's device code, but not for claude", () => {
+    const codexHtml = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({
+            agentId: "codex",
+            login: loginState({
+              phase: "awaiting-browser",
+              url: "https://auth.openai.com/codex/device",
+              code: "ABCD-12345",
+            }),
+          }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+    expect(codexHtml).toContain("Copy code ABCD-12345");
+
+    const claudeHtml = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({
+            agentId: "claude-code",
+            login: loginState({
+              phase: "awaiting-browser",
+              url: "https://claude.com/x",
+              code: "ABCD-12345",
+            }),
+          }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+    expect(claudeHtml).not.toContain("Copy code");
+  });
+
+  it("shows the paste-into-terminal prompt with no button in awaiting-code", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({ agentId: "claude-code", login: loginState({ phase: "awaiting-code" }) }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+
+    expect(html).toContain("Paste the code into the terminal below");
+    expect(html).not.toContain("<button");
+  });
+
+  it("shows Authorized with no button once succeeded", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({ agentId: "claude-code", login: loginState({ phase: "succeeded" }) }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+
+    expect(html).toContain("Authorized");
+    expect(html).not.toContain("<button");
+  });
+
+  it("shows the failure message and a Sign in again button on failure", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({
+            agentId: "codex",
+            login: loginState({ phase: "failed", message: "Authentication failed." }),
+          }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+
+    expect(html).toContain("Authentication failed.");
+    expect(html).toContain("Sign in again");
+  });
+
+  it("a cancelled session falls back to the baseline not-authorized row (as if there were no session)", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({ agentId: "claude-code", login: loginState({ phase: "cancelled" }) }),
+        ])}
+        onSignIn={noop}
+      />,
+    );
+
+    expect(html).toContain("Not signed in");
+    expect(html).toContain("Sign in to Claude");
   });
 });

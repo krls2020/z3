@@ -1,58 +1,42 @@
 /**
- * Fires the agent-login terminal move (S7 plan D4): open the login terminal,
- * then type the CLI's own login command into it.
+ * Fires the agent-login RPC (S7 follow-up F8): open the login terminal
+ * panel, then ask the server to run the CLI's own login command and walk
+ * its output. What the user needs to act on comes back on the
+ * `ZeropsAgentAuth` row's `login` field (`useZeropsAgentAuth`), not from
+ * this call directly.
  *
- * Deliberately thin — everything decidable without React or the RPC layer
- * (which terminal, which cwd, the exact payloads) lives in the pure
- * `buildAgentLoginTerminalPlan` (`agentLogin.ts`, tested directly); this hook
- * is just the wiring that fires it, mirroring the shape `runProjectScript`
- * uses in `ChatView.tsx` (`setTerminalOpen(true)` → `openTerminal` →
- * `writeTerminal`). Not extracted from `runProjectScript` itself: that
- * function is tightly coupled to ChatView-local state that has nothing to do
- * with signing in (busy-terminal detection, project cwd derivation, extra env
- * vars, focus-request bookkeeping, thread error toasts) — sharing it would
- * mean threading all of that through for a simple, deterministic, rarely
- * used action instead. See the S7-2 report for what this means for a future
- * unification pass.
+ * Deliberately thin — the RPC does all the deciding now; this hook is just
+ * the wiring that fires it and makes the terminal panel visible so the user
+ * can watch (and, once the CLI asks for it, paste a code into) the session
+ * the server just started.
  */
 import type { ScopedThreadRef, ZeropsAgentId } from "@t3tools/contracts";
 import { useCallback } from "react";
 
-import { terminalEnvironment } from "../state/terminal";
+import { zeropsFeeds } from "../state/zerops";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
-import { buildAgentLoginTerminalPlan } from "./agentLogin";
 
 export function useAgentLogin(threadRef: ScopedThreadRef | null): (agentId: ZeropsAgentId) => void {
   const setTerminalOpen = useTerminalUiStateStore((state) => state.setTerminalOpen);
-  const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
-  const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
+  const startLogin = useAtomCommand(zeropsFeeds.agentLoginStart, "zerops agent login start");
 
   return useCallback(
     (agentId: ZeropsAgentId) => {
       if (threadRef === null) {
         return;
       }
-      const { openInput, writeInput } = buildAgentLoginTerminalPlan(threadRef, agentId);
-
+      // Open the panel first — the CLI's own output starts arriving the
+      // moment the server writes the login command, and the user needs the
+      // pane visible from the start (not just once a paste prompt appears).
       setTerminalOpen(threadRef, true);
-      void (async () => {
-        const openResult = await openTerminal({
-          environmentId: threadRef.environmentId,
-          input: openInput,
-        });
-        if (openResult._tag === "Failure") {
-          // openTerminal already reports its own failure (useAtomCommand's
-          // default reportFailure); writing the login command into a
-          // terminal that never opened would just land nowhere.
-          return;
-        }
-        await writeTerminal({
-          environmentId: threadRef.environmentId,
-          input: writeInput,
-        });
-      })();
+      // `startLogin` already reports its own failure (useAtomCommand's
+      // default reportFailure); there is nothing further to await here.
+      void startLogin({
+        environmentId: threadRef.environmentId,
+        input: { agentId, threadId: threadRef.threadId },
+      });
     },
-    [threadRef, setTerminalOpen, openTerminal, writeTerminal],
+    [threadRef, setTerminalOpen, startLogin],
   );
 }
