@@ -131,6 +131,49 @@ describe("watchWithFallback", () => {
     handle.dispose();
   });
 
+  // S7 follow-up F4: watching a FILE target (as ZeropsAgentAuth.ts now
+  // does for the credential path) must ignore writes to SIBLING files in
+  // the same directory — Claude's own `backups/`, `sessions/` writes were
+  // re-triggering the credential check on every probe before this fix.
+  it("ignores writes to sibling files in the same directory", async () => {
+    const target = path.join(root, ".credentials.json");
+    const sibling = path.join(root, "backups", "x.json");
+    fs.writeFileSync(target, "{}");
+    fs.mkdirSync(path.join(root, "backups"));
+    let fired = 0;
+    const handle = watchWithFallback(target, root, () => {
+      fired += 1;
+    });
+    try {
+      // Let watcher-startup noise settle first — on this platform, attaching
+      // right after other writes in the same directory can replay a stale
+      // event for the target's own name once the watch actually engages
+      // (the same FSEvents non-determinism this file's header comment and
+      // `waitForWithNudge` already call out). This test asserts a NEGATIVE
+      // (no fire for the sibling), so that startup noise would otherwise
+      // register as a false failure — resetting the counter after the
+      // settle window isolates the assertion to the sibling write alone.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      fired = 0;
+
+      fs.writeFileSync(sibling, "{}");
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(fired).toBe(0);
+
+      // Confirm the watcher is actually live — a real change to the target
+      // itself still fires, so a silent "nothing ever fires" bug wouldn't
+      // pass this test by accident.
+      fs.writeFileSync(target, '{"changed":true}');
+      await waitForWithNudge(
+        () => fired > 0,
+        () => fs.writeFileSync(target, '{"changed":true,"nudge":true}'),
+      );
+      expect(fired).toBeGreaterThan(0);
+    } finally {
+      handle.dispose();
+    }
+  });
+
   it("stops firing after dispose", async () => {
     const target = path.join(root, "auth.json");
     fs.writeFileSync(target, "{}");

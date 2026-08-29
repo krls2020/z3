@@ -13,14 +13,29 @@
  * Credential presence is not proof of a working login — Claude stages the
  * file then atomically renames it, and a stale/expired credential can exist
  * on disk. So every credential event (the file appearing, OR an existing
- * one being replaced) coalesces into ONE targeted, single-flight refresh of
- * that agent's own provider instance (never the registry-wide refresh,
- * which probes every configured provider); only once that refresh reads
- * back `auth.status === "authenticated"` does this feed spawn
- * `zcp agent mark-oauth <agent-id>` (through {@link ZeropsCli}). An OAuth
- * or token flag appearing in the zembed env store triggers the same
- * targeted refresh (to keep `providerAuth` current) without ever spawning
- * `mark-oauth` itself.
+ * one being replaced) coalesces into ONE targeted, single-flight check of
+ * that agent's own login state; only once that check reads back
+ * `"authenticated"` does this feed spawn `zcp agent mark-oauth <agent-id>`
+ * (through {@link ZeropsCli}). An OAuth or token flag appearing in the
+ * zembed env store triggers the same targeted check (to keep `providerAuth`
+ * current) without ever spawning `mark-oauth` itself.
+ *
+ * ## How it verifies (S7 follow-up F1)
+ *
+ * The targeted check does NOT trust `ProviderRegistry`'s own probe —
+ * live-verified to report `authenticated` for Claude Code off
+ * `~/.claude.json`'s account section alone, even with the credential
+ * artifact itself absent. Instead `refreshProviderAuth` (injected at
+ * {@link layer}) runs each agent CLI's OWN status command
+ * (`ZeropsAgentAuthVerify.verifyAgentAuth` — `claude auth status` /
+ * `codex login status`, the same argv-list spawn shape {@link ZeropsCli}
+ * uses for `zcp`) and reduces its answer to `providerAuth`; that is what
+ * gates `mark-oauth`. The provider registry's `refreshInstance` is still
+ * called alongside it, but only as a best-effort cache warm for the
+ * driver picker upstream owns — never as a source of truth here, and never
+ * something a failure of it can break. The picker itself may still lag up
+ * to `CAPABILITIES_PROBE_TTL` (~5 min) behind a logout; that lag is
+ * upstream's own cache, not a bug in this feed.
  */
 import * as NodeOS from "node:os";
 
@@ -33,6 +48,7 @@ import {
   type ZeropsAgentAuthState,
   type ZeropsAgentId,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -49,12 +65,14 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import { isZeropsEnvironment } from "./ZeropsEnvironment.ts";
 import * as ZeropsCliModule from "./ZeropsCli.ts";
 import { ZeropsCli, type ZeropsCliError } from "./ZeropsCli.ts";
 import { watchWithFallback, type WatcherHandle } from "./ZeropsAgentAuthWatcher.ts";
+import { spawnAgentAuthProbe, verifyAgentAuth } from "./ZeropsAgentAuthVerify.ts";
 
 /** The two agents this feed reports on (docs/spec-welcome-mode.md §3: only agents with a verified probe). */
 export const KNOWN_AGENT_IDS: ReadonlyArray<ZeropsAgentId> = ["claude-code", "codex"];
@@ -151,16 +169,18 @@ export const buildSnapshot = (
 // I/O
 // ---------------------------------------------------------------------------
 
-/** The path segments (relative to `homeDir`) of each agent's credential artifact. Presence only, never read for content. */
+/**
+ * The path segments (relative to `homeDir`) of each agent's credential
+ * artifact. Presence only, never read for content — and, since S7 follow-up
+ * F4, also the credential WATCHER's own target: `watchWithFallback` watches
+ * a file target via its parent directory filtered by basename, so pointing
+ * the watcher at the file itself (rather than its containing `.claude` /
+ * `.codex` directory) is what keeps every OTHER write under that directory
+ * — Claude's own `backups/`, `sessions/` — from re-triggering a check.
+ */
 const CRED_PROBE_SEGMENTS: Readonly<Record<ZeropsAgentId, ReadonlyArray<string>>> = {
   "claude-code": [".claude", ".credentials.json"],
   codex: [".codex", "auth.json"],
-};
-
-/** The directory each cred probe's file lives under — what the credential watcher attaches to. */
-const CRED_WATCH_DIR_SEGMENTS: Readonly<Record<ZeropsAgentId, ReadonlyArray<string>>> = {
-  "claude-code": [".claude"],
-  codex: [".codex"],
 };
 
 /**
@@ -389,6 +409,15 @@ export const make = (options: ZeropsAgentAuthOptions) =>
           ...current,
           markedOAuth: { ...current.markedOAuth, [agentId]: true },
         }));
+        // S7 follow-up F5: the success path previously logged nothing —
+        // `changed`/`migrated` are the two facts worth a record, never a
+        // credential value.
+        yield* Effect.logInfo("zerops agent auth: mark-oauth spawned", {
+          agentId,
+          key: outcome.success.key,
+          changed: outcome.success.changed,
+          migrated: outcome.success.migrated,
+        });
       });
 
     /**
@@ -404,7 +433,16 @@ export const make = (options: ZeropsAgentAuthOptions) =>
      */
     const checkProviderAuth = (agentId: ZeropsAgentId) =>
       Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis;
         const status = yield* refreshProviderAuth(agentId);
+        // S7 follow-up F5: this feed's own verification previously logged
+        // nothing at all — every check now leaves one record of what it
+        // found, never a credential value.
+        yield* Effect.logInfo("zerops agent auth: verification", {
+          agentId,
+          providerAuth: status,
+          elapsedMs: (yield* Clock.currentTimeMillis) - startedAt,
+        });
         const before = yield* Ref.get(state);
         const allowMarkOAuth = before.pendingCredentialCheck[agentId];
         const alreadyMarked = before.markedOAuth[agentId];
@@ -490,10 +528,22 @@ export const make = (options: ZeropsAgentAuthOptions) =>
         const suffix = AGENT_OAUTH_SUFFIX[agentId];
         const oauthKey = `ZCP_AGENT_OAUTH_${suffix}`;
         const tokenKey = `ZCP_AGENT_TOKEN_${suffix}`;
-        const oauthAppeared = before?.[oauthKey] !== "true" && after?.[oauthKey] === "true";
+        const wasOAuth = before?.[oauthKey] === "true";
+        const isOAuth = after?.[oauthKey] === "true";
+        const oauthAppeared = !wasOAuth && isOAuth;
         const tokenAppeared = !before?.[tokenKey] && !!after?.[tokenKey];
         if (oauthAppeared || tokenAppeared) {
           yield* requestProviderCheck(agentId, { fromCredential: false });
+        }
+        // S7 follow-up F2: the platform flag can disappear without this
+        // process restarting (a GUI revoke). Reset the latch so the next
+        // VERIFIED credential re-marks — otherwise a revoke-then-re-login
+        // would leave `mark-oauth` permanently skipped for this agent.
+        if (wasOAuth && !isOAuth) {
+          yield* Ref.update(state, (current) => ({
+            ...current,
+            markedOAuth: { ...current.markedOAuth, [agentId]: false },
+          }));
         }
       }
       yield* publish;
@@ -544,7 +594,7 @@ export const make = (options: ZeropsAgentAuthOptions) =>
 
     for (const agentId of KNOWN_AGENT_IDS) {
       yield* runWatcher(
-        path.join(homeDir, ...CRED_WATCH_DIR_SEGMENTS[agentId]),
+        path.join(homeDir, ...CRED_PROBE_SEGMENTS[agentId]),
         homeDir,
         recomputeCredential(agentId),
       );
@@ -569,21 +619,24 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const cli = yield* ZeropsCli;
     const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
+    const processRunner = yield* ProcessRunner.ProcessRunner;
     const config = yield* ServerConfig;
-    const refreshProviderAuth = (
-      agentId: ZeropsAgentId,
-    ): Effect.Effect<ServerProviderAuthStatus> => {
-      const instanceId = agentDefaultInstanceId(agentId);
-      return providerRegistry
-        .refreshInstance(instanceId)
-        .pipe(
-          Effect.map(
-            (providers) =>
-              providers.find((provider) => provider.instanceId === instanceId)?.auth.status ??
-              "unknown",
-          ),
-        );
-    };
+    const spawnProbe = spawnAgentAuthProbe(processRunner, config.cwd);
+
+    /**
+     * Best-effort cache warm for the provider driver picker — never a
+     * source of truth here (see the module header's "How it verifies"),
+     * so a failure is swallowed rather than let it disturb this feed's own
+     * check.
+     */
+    const refreshProviderCache = (agentId: ZeropsAgentId): Effect.Effect<void> =>
+      providerRegistry
+        .refreshInstance(agentDefaultInstanceId(agentId))
+        .pipe(Effect.asVoid, Effect.ignore);
+
+    const refreshProviderAuth = (agentId: ZeropsAgentId): Effect.Effect<ServerProviderAuthStatus> =>
+      verifyAgentAuth(agentId, spawnProbe).pipe(Effect.tap(() => refreshProviderCache(agentId)));
+
     return yield* make({
       cli,
       refreshProviderAuth,
@@ -593,4 +646,4 @@ export const layer = Layer.effect(
       watch: watchWithFallback,
     });
   }),
-).pipe(Layer.provide(ZeropsCliModule.layer));
+).pipe(Layer.provide(ZeropsCliModule.layer), Layer.provide(ProcessRunner.layer));

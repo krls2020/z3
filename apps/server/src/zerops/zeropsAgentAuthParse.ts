@@ -1,8 +1,11 @@
 /**
  * Parses the one-line JSON `zcp agent mark-oauth <agent-id>` prints on stdout
- * (`cmd/zcp/agent.go` `agentMarkOAuthOutput`): `{ok, agent, key, changed}`.
- * Never carries an env value or a credential — only the flag key it upserted
- * and whether the upsert actually changed anything.
+ * (`cmd/zcp/agent.go` `agentMarkOAuthOutput`): `{ok, agent, key, changed,
+ * migrated}` — `migrated` is `omitempty` on the Go side (absent means
+ * false: no org-owner env migration happened, spec-welcome-mode.md §4.2).
+ * Never carries an env value or a credential — only the flag key it
+ * upserted, whether the upsert actually changed anything, and whether it
+ * migrated an existing org-owner-scoped flag while doing so.
  */
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -10,6 +13,7 @@ import * as Schema from "effect/Schema";
 export interface MarkAgentOAuthResult {
   readonly key: string;
   readonly changed: boolean;
+  readonly migrated: boolean;
 }
 
 const RawMarkAgentOAuthOutput = Schema.Struct({
@@ -17,6 +21,7 @@ const RawMarkAgentOAuthOutput = Schema.Struct({
   agent: Schema.String,
   key: Schema.String,
   changed: Schema.Boolean,
+  migrated: Schema.optional(Schema.Boolean),
 });
 
 const decodeMarkAgentOAuthOutput = Schema.decodeUnknownOption(RawMarkAgentOAuthOutput);
@@ -37,5 +42,5 @@ export const parseMarkAgentOAuthOutput = (text: string): MarkAgentOAuthResult | 
   if (decoded === undefined || !decoded.ok) {
     return undefined;
   }
-  return { key: decoded.key, changed: decoded.changed };
+  return { key: decoded.key, changed: decoded.changed, migrated: decoded.migrated ?? false };
 };
