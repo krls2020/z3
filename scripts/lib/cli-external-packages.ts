@@ -1,15 +1,10 @@
 /**
  * The single source of truth for packages the server CLI bundle must NOT inline.
  *
- * Two consumers derive from this list, and they must never disagree:
- *
- * - apps/server/vite.config.ts decides what stays external to the bundle.
- * - scripts/build-desktop-artifact.ts selects the runtime dependency roots for
- *   the Windows server sidecar.
- *
- * A runtime package that is external but absent from the sidecar fails as soon
- * as Node resolves it from the emitted bundle. Keeping both consumers on one
- * list prevents packaging from drifting away from the bundle boundary.
+ * `apps/server/vite.config.ts` derives what stays external to the bundle from
+ * this list. A runtime package that is external but absent from the CLI's own
+ * production install fails as soon as Node resolves it from the emitted
+ * bundle.
  *
  * Entries are matched as prefixes (`id.startsWith(prefix)`), so they also cover
  * a package's platform-specific siblings — `node-gyp-build` covers
@@ -30,7 +25,6 @@ export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "ffi-rs",
   "@yuuang/",
   "@ff-labs/",
-  "@clerk/electron-passkeys",
   "@msgpackr-extract/",
   "msgpackr-extract",
   "node-gyp-build",

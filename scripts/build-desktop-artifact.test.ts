@@ -200,9 +200,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       resolveDesktopRuntimeDependencies(
         {
           "@effect/platform-node": "catalog:",
+          "@t3tools/client-runtime": "workspace:*",
           "@t3tools/contracts": "workspace:*",
           "@t3tools/shared": "workspace:*",
-          "@t3tools/ssh": "workspace:*",
           effect: "catalog:",
           electron: "41.5.0",
         },

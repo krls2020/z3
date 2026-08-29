@@ -1,8 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { ClerkProvider } from "@clerk/react";
-import { passkeys } from "@clerk/electron/passkeys";
-import { ClerkProvider as ElectronClerkProvider } from "@clerk/electron/react";
 import { createHashHistory, createBrowserHistory } from "@tanstack/react-router";
 
 import "./index.css";
@@ -35,19 +33,9 @@ const app = <AppRoot router={router} />;
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     {clerkPublishableKey && hasCloudPublicConfig() ? (
-      isElectron ? (
-        <ElectronClerkProvider
-          appearance={clerkAppearance}
-          publishableKey={clerkPublishableKey}
-          passkeys={passkeys}
-        >
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
-        </ElectronClerkProvider>
-      ) : (
-        <ClerkProvider appearance={clerkAppearance} publishableKey={clerkPublishableKey}>
-          <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
-        </ClerkProvider>
-      )
+      <ClerkProvider appearance={clerkAppearance} publishableKey={clerkPublishableKey}>
+        <ManagedRelayAuthProvider>{app}</ManagedRelayAuthProvider>
+      </ClerkProvider>
     ) : (
       app
     )}
