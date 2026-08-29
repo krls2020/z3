@@ -26,7 +26,6 @@ import * as Result from "effect/Result";
 import {
   ChevronDownIcon,
   CloudIcon,
-  LaptopIcon,
   LoaderIcon,
   MonitorIcon,
   PlusIcon,
@@ -35,7 +34,6 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { isDesktopLocalConnectionTarget } from "../../connection/desktopLocal";
 import { isElectron } from "../../env";
 import { usePrimarySessionState } from "../../environments/primary";
 import { useEnvironmentSettings, useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -154,7 +152,6 @@ function providerEnvironmentIcon(environment: EnvironmentPresentation) {
   if (environment.entry.target._tag === "PrimaryConnectionTarget") return MonitorIcon;
   if (environment.entry.target._tag === "RelayConnectionTarget") return CloudIcon;
   if (environment.entry.target._tag === "SshConnectionTarget") return TerminalIcon;
-  if (isDesktopLocalConnectionTarget(environment.entry.target)) return LaptopIcon;
   return CloudIcon;
 }
 
@@ -162,7 +159,6 @@ function providerEnvironmentDetail(environment: EnvironmentPresentation): string
   if (environment.entry.target._tag === "PrimaryConnectionTarget") return "Primary device";
   if (environment.relayManaged) return "T3 Connect";
   if (environment.entry.target._tag === "SshConnectionTarget") return "SSH";
-  if (isDesktopLocalConnectionTarget(environment.entry.target)) return "Local device";
   return environment.displayUrl ?? "Remote device";
 }
 

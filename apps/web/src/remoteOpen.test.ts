@@ -1,5 +1,4 @@
 import {
-  BearerConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
   SshConnectionTarget,
@@ -55,21 +54,6 @@ describe("resolveRemoteOpenState", () => {
         target: primaryTarget("http://172.29.112.1:14369"),
         sshAlias: null,
         isDesktopRenderer: true,
-        remoteOpenTargets: REMOTE_OPEN_TARGETS,
-      }),
-    ).toEqual({ mode: "local-exec" });
-  });
-
-  it("keeps exec behavior for desktop-local secondary backends", () => {
-    expect(
-      resolveRemoteOpenState({
-        target: new BearerConnectionTarget({
-          environmentId,
-          label: "WSL (Ubuntu)",
-          connectionId: "local:wsl-1",
-        }),
-        sshAlias: null,
-        isDesktopRenderer: false,
         remoteOpenTargets: REMOTE_OPEN_TARGETS,
       }),
     ).toEqual({ mode: "local-exec" });
