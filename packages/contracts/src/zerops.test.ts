@@ -49,10 +49,38 @@ describe("ZeropsAgentAuth", () => {
       credPresent: true,
       flagOAuth: true,
       flagToken: false,
+      providerAuth: "authenticated",
       state: "authorized",
     });
     expect(decoded.agentId).toBe("claude-code");
     expect(decoded.state).toBe("authorized");
+    expect(decoded.providerAuth).toBe("authenticated");
+  });
+
+  it("accepts every ServerProviderAuthStatus value for providerAuth", () => {
+    for (const providerAuth of ["authenticated", "unauthenticated", "unknown"]) {
+      const decoded = decodeAgentAuth({
+        agentId: "codex",
+        credPresent: false,
+        flagOAuth: false,
+        flagToken: false,
+        providerAuth,
+        state: "not-authorized",
+      });
+      expect(decoded.providerAuth).toBe(providerAuth);
+    }
+  });
+
+  it("rejects a missing providerAuth field", () => {
+    expect(() =>
+      decodeAgentAuth({
+        agentId: "codex",
+        credPresent: false,
+        flagOAuth: false,
+        flagToken: false,
+        state: "not-authorized",
+      }),
+    ).toThrow();
   });
 });
 
@@ -66,6 +94,7 @@ describe("ZeropsAgentAuthSnapshot", () => {
           credPresent: false,
           flagOAuth: false,
           flagToken: false,
+          providerAuth: "unknown",
           state: "not-authorized",
         },
         {
@@ -73,6 +102,7 @@ describe("ZeropsAgentAuthSnapshot", () => {
           credPresent: true,
           flagOAuth: false,
           flagToken: false,
+          providerAuth: "unauthenticated",
           state: "local-only",
         },
       ],

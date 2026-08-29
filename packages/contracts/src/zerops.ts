@@ -33,6 +33,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ServerProviderAuthStatus } from "./server.ts";
 
 // ---------------------------------------------------------------------------
 // Topology
@@ -350,6 +351,16 @@ export const ZeropsAgentAuth = Schema.Struct({
   flagOAuth: Schema.Boolean,
   /** `ZCP_AGENT_TOKEN_<SUFFIX>` present (any value) in the zembed env store. */
   flagToken: Schema.Boolean,
+  /**
+   * The provider's own authentication probe for this agent's default
+   * instance ({@link ServerProviderAuth.status}), refreshed (coalesced,
+   * targeted to this one provider) whenever the credential artifact appears
+   * or is replaced. `"unknown"` before the first check has run. Presence of
+   * the credential FILE is not proof of a working login — a stale or
+   * unusable credential can exist on disk — so this is the field that
+   * actually gates the `mark-oauth` spawn, never `credPresent` alone.
+   */
+  providerAuth: ServerProviderAuthStatus,
   state: ZeropsAgentAuthState,
 });
 export type ZeropsAgentAuth = typeof ZeropsAgentAuth.Type;

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { buildSnapshot, computeAgentAuthState } from "./ZeropsAgentAuth.ts";
+import { agentDefaultInstanceId, buildSnapshot, computeAgentAuthState } from "./ZeropsAgentAuth.ts";
+
+describe("agentDefaultInstanceId", () => {
+  it("maps claude-code to the claudeAgent driver's default instance", () => {
+    expect(agentDefaultInstanceId("claude-code")).toBe("claudeAgent");
+  });
+
+  it("maps codex to the codex driver's default instance", () => {
+    expect(agentDefaultInstanceId("codex")).toBe("codex");
+  });
+});
 
 // The §3 W-STATE matrix (docs/spec-welcome-mode.md), pinned verbatim against
 // `vscode-bootstrap-welcome.js`'s `computeAgentState`. `credVerifiable` is
@@ -24,11 +34,14 @@ describe("computeAgentAuthState", () => {
   });
 });
 
+const UNKNOWN_PROVIDER_AUTH = { "claude-code": "unknown", codex: "unknown" } as const;
+
 describe("buildSnapshot", () => {
-  it("reads both agents' flags from the env store by suffix", () => {
+  it("reads both agents' flags from the env store by suffix, and carries providerAuth through unchanged", () => {
     const snapshot = buildSnapshot(
       { ZCP_AGENT_OAUTH_CLAUDE_CODE: "true", ZCP_AGENT_TOKEN_CODEX: "sometoken" },
       { "claude-code": true, codex: false },
+      { "claude-code": "authenticated", codex: "unauthenticated" },
     );
     expect(snapshot.available).toBe(true);
     expect(snapshot.agents).toEqual([
@@ -37,6 +50,7 @@ describe("buildSnapshot", () => {
         credPresent: true,
         flagOAuth: true,
         flagToken: false,
+        providerAuth: "authenticated",
         state: "authorized",
       },
       {
@@ -44,13 +58,18 @@ describe("buildSnapshot", () => {
         credPresent: false,
         flagOAuth: false,
         flagToken: true,
+        providerAuth: "unauthenticated",
         state: "authorized-token",
       },
     ]);
   });
 
   it("treats a missing env store as no flags set", () => {
-    const snapshot = buildSnapshot(undefined, { "claude-code": false, codex: true });
+    const snapshot = buildSnapshot(
+      undefined,
+      { "claude-code": false, codex: true },
+      UNKNOWN_PROVIDER_AUTH,
+    );
     expect(snapshot.agents.find((agent) => agent.agentId === "claude-code")?.state).toBe(
       "not-authorized",
     );
@@ -61,7 +80,17 @@ describe("buildSnapshot", () => {
     const snapshot = buildSnapshot(
       { ZCP_AGENT_OAUTH_CLAUDE_CODE: "false" },
       { "claude-code": false, codex: false },
+      UNKNOWN_PROVIDER_AUTH,
     );
     expect(snapshot.agents.find((agent) => agent.agentId === "claude-code")?.flagOAuth).toBe(false);
+  });
+
+  it("defaults providerAuth to unknown before any provider check has run", () => {
+    const snapshot = buildSnapshot(
+      undefined,
+      { "claude-code": false, codex: false },
+      UNKNOWN_PROVIDER_AUTH,
+    );
+    expect(snapshot.agents.every((agent) => agent.providerAuth === "unknown")).toBe(true);
   });
 });
