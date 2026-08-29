@@ -1,0 +1,7 @@
+{
+  "upstream": "db36862c71ee4602601ab4ddd815a7cc7d736725",
+  "paths": {
+    "packages/effect-codex-app-server": "b6962682557984f0d7495e73e30cf8e484c72d98",
+    "packages/effect-acp": "b3fbe1643622e47323a8e0eb5717ef2e405701f2"
+  }
+}
