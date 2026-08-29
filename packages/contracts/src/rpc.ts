@@ -192,7 +192,12 @@ import {
   ResourceTelemetryRetryResult,
   ResourceTelemetrySnapshot,
 } from "./resourceTelemetry.ts";
-import { ZeropsLifecycle, ZeropsLifecycleGetInput, ZeropsTopologySnapshot } from "./zerops.ts";
+import {
+  ZeropsAgentAuthSnapshot,
+  ZeropsLifecycle,
+  ZeropsLifecycleGetInput,
+  ZeropsTopologySnapshot,
+} from "./zerops.ts";
 import { UsageReadError, UsageSummary, UsageSummaryInput } from "./usage.ts";
 import { ServerSettings, ServerSettingsError, ServerSettingsPatch } from "./settings.ts";
 import {
@@ -343,6 +348,7 @@ export const WS_METHODS = {
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
   subscribeZeropsTopology: "subscribeZeropsTopology",
   subscribeZeropsLifecycle: "subscribeZeropsLifecycle",
+  subscribeZeropsAgentAuth: "zerops.agentAuth.subscribe",
 } as const;
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
@@ -1067,6 +1073,13 @@ export const WsSubscribeZeropsLifecycleRpc = Rpc.make(WS_METHODS.subscribeZerops
   stream: true,
 });
 
+export const WsSubscribeZeropsAgentAuthRpc = Rpc.make(WS_METHODS.subscribeZeropsAgentAuth, {
+  payload: Schema.Struct({}),
+  success: ZeropsAgentAuthSnapshot,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsExecRunRpc,
   WsServerProbeRpc,
@@ -1168,6 +1181,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeZeropsTopologyRpc,
   WsZeropsLifecycleGetRpc,
   WsSubscribeZeropsLifecycleRpc,
+  WsSubscribeZeropsAgentAuthRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,

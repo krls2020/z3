@@ -301,6 +301,48 @@ export const ZeropsLifecycle = Schema.Struct({
 export type ZeropsLifecycle = typeof ZeropsLifecycle.Type;
 
 // ---------------------------------------------------------------------------
+// Agent auth — S7 plan D1/D3
+// ---------------------------------------------------------------------------
+
+/** The agent CLIs z3 can drive a login for. Closed vocabulary — see plan D6. */
+export const ZeropsAgentId = Schema.Literals(["claude-code", "codex"]);
+export type ZeropsAgentId = typeof ZeropsAgentId.Type;
+
+/**
+ * welcome.js's five-value matrix, verbatim
+ * (`vscode-bootstrap-welcome.js:391-401`): whether a credential artifact is
+ * present on disk, whether the platform-owned OAuth/token flag agrees, and
+ * what that combination means for the card.
+ */
+export const ZeropsAgentAuthState = Schema.Literals([
+  "authorized-token",
+  "authorized",
+  "reconnect",
+  "local-only",
+  "not-authorized",
+]);
+export type ZeropsAgentAuthState = typeof ZeropsAgentAuthState.Type;
+
+export const ZeropsAgentAuth = Schema.Struct({
+  agentId: ZeropsAgentId,
+  /** Whether the credential artifact (`~/.claude/.credentials.json` etc.) exists. Presence-only — contents are never read. */
+  credPresent: Schema.Boolean,
+  flagOAuth: Schema.Boolean,
+  flagToken: Schema.Boolean,
+  state: ZeropsAgentAuthState,
+});
+export type ZeropsAgentAuth = typeof ZeropsAgentAuth.Type;
+
+/** One per environment (a z3 environment is one Zerops project) — same shape as {@link ZeropsTopologySnapshot}. */
+export const ZeropsAgentAuthSnapshot = Schema.Struct({
+  /** `false` outside Zerops mode (no `T3CODE_ZEROPS_PROJECT_ID`) — the feed is off, not erroring. */
+  available: Schema.Boolean,
+  reason: Schema.optional(Schema.String),
+  agents: Schema.Array(ZeropsAgentAuth),
+});
+export type ZeropsAgentAuthSnapshot = typeof ZeropsAgentAuthSnapshot.Type;
+
+// ---------------------------------------------------------------------------
 // RPC payloads
 // ---------------------------------------------------------------------------
 
