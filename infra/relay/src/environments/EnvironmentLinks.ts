@@ -1,5 +1,4 @@
 import type {
-  RelayClientEnvironmentRecord,
   RelayEnvironmentLinkProofPayload,
   RelayEnvironmentLinkRequest,
   RelayManagedEndpoint,
@@ -13,10 +12,6 @@ import { and, eq, isNull, or } from "drizzle-orm";
 
 import * as RelayDb from "../db.ts";
 import { relayEnvironmentLinks } from "../persistence/schema.ts";
-
-export interface RelayLinkedEnvironmentRecord extends RelayClientEnvironmentRecord {
-  readonly environmentPublicKey: string;
-}
 
 export interface AgentAwarenessDeliveryUserRecord {
   readonly userId: string;
@@ -63,44 +58,6 @@ export class EnvironmentPublicKeyListPersistenceError extends Schema.TaggedError
   }
 }
 
-export class EnvironmentLinkListPersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkListPersistenceError>()(
-  "EnvironmentLinkListPersistenceError",
-  {
-    userId: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to list environment links for user '${this.userId}'`;
-  }
-}
-
-export class EnvironmentLinkLookupPersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkLookupPersistenceError>()(
-  "EnvironmentLinkLookupPersistenceError",
-  {
-    userId: Schema.String,
-    environmentId: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to look up environment link for user '${this.userId}', environment '${this.environmentId}'`;
-  }
-}
-
-export class EnvironmentLinkRevokePersistenceError extends Schema.TaggedErrorClass<EnvironmentLinkRevokePersistenceError>()(
-  "EnvironmentLinkRevokePersistenceError",
-  {
-    userId: Schema.String,
-    environmentId: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to revoke environment link for user '${this.userId}', environment '${this.environmentId}'`;
-  }
-}
-
 export class EnvironmentLinks extends Context.Service<
   EnvironmentLinks,
   {
@@ -123,20 +80,6 @@ export class EnvironmentLinks extends Context.Service<
     readonly listPublicKeysForEnvironment: (input: {
       readonly environmentId: string;
     }) => Effect.Effect<ReadonlyArray<string>, EnvironmentPublicKeyListPersistenceError>;
-    readonly listForUser: (input: {
-      readonly userId: string;
-    }) => Effect.Effect<
-      ReadonlyArray<RelayClientEnvironmentRecord>,
-      EnvironmentLinkListPersistenceError
-    >;
-    readonly getForUser: (input: {
-      readonly userId: string;
-      readonly environmentId: string;
-    }) => Effect.Effect<RelayLinkedEnvironmentRecord | null, EnvironmentLinkLookupPersistenceError>;
-    readonly revokeForUser: (input: {
-      readonly userId: string;
-      readonly environmentId: string;
-    }) => Effect.Effect<boolean, EnvironmentLinkRevokePersistenceError>;
   }
 >()("t3code-relay/environments/EnvironmentLinks") {}
 
@@ -183,9 +126,9 @@ const make = Effect.gen(function* () {
           endpointHttpBaseUrl: endpoint.httpBaseUrl,
           endpointWsBaseUrl: endpoint.wsBaseUrl,
           endpointProviderKind: endpoint.providerKind,
+          zeropsProjectId: proof.zeropsProjectId,
           notificationsEnabled: request.notificationsEnabled,
           liveActivitiesEnabled: request.liveActivitiesEnabled,
-          managedTunnelsEnabled: request.managedTunnelsEnabled,
           createdByDeviceId: request.deviceId ?? null,
           revokedAt: null,
           createdAt: now,
@@ -199,9 +142,9 @@ const make = Effect.gen(function* () {
             endpointHttpBaseUrl: endpoint.httpBaseUrl,
             endpointWsBaseUrl: endpoint.wsBaseUrl,
             endpointProviderKind: endpoint.providerKind,
+            zeropsProjectId: proof.zeropsProjectId,
             notificationsEnabled: request.notificationsEnabled,
             liveActivitiesEnabled: request.liveActivitiesEnabled,
-            managedTunnelsEnabled: request.managedTunnelsEnabled,
             createdByDeviceId: request.deviceId ?? null,
             revokedAt: null,
             updatedAt: now,
@@ -297,135 +240,6 @@ const make = Effect.gen(function* () {
               }),
           ),
         );
-    }),
-
-    listForUser: Effect.fn("relay.environment_links.list_for_user")(function* (input) {
-      return yield* db
-        .select({
-          environmentId: relayEnvironmentLinks.environmentId,
-          environmentLabel: relayEnvironmentLinks.environmentLabel,
-          endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
-          endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
-          endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
-          createdAt: relayEnvironmentLinks.createdAt,
-        })
-        .from(relayEnvironmentLinks)
-        .where(
-          and(
-            eq(relayEnvironmentLinks.userId, input.userId),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
-        )
-        .pipe(
-          Effect.map((rows) =>
-            rows.map((row) => ({
-              environmentId: row.environmentId as RelayClientEnvironmentRecord["environmentId"],
-              label:
-                row.environmentLabel.trim().length > 0 ? row.environmentLabel : row.environmentId,
-              endpoint: {
-                httpBaseUrl: row.endpointHttpBaseUrl,
-                wsBaseUrl: row.endpointWsBaseUrl,
-                providerKind:
-                  row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
-              },
-              linkedAt: row.createdAt,
-            })),
-          ),
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkListPersistenceError({
-                userId: input.userId,
-                cause,
-              }),
-          ),
-        );
-    }),
-
-    getForUser: Effect.fn("relay.environment_links.get_for_user")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.environment_id": input.environmentId,
-      });
-      return yield* db
-        .select({
-          environmentId: relayEnvironmentLinks.environmentId,
-          environmentLabel: relayEnvironmentLinks.environmentLabel,
-          environmentPublicKey: relayEnvironmentLinks.environmentPublicKey,
-          endpointHttpBaseUrl: relayEnvironmentLinks.endpointHttpBaseUrl,
-          endpointWsBaseUrl: relayEnvironmentLinks.endpointWsBaseUrl,
-          endpointProviderKind: relayEnvironmentLinks.endpointProviderKind,
-          createdAt: relayEnvironmentLinks.createdAt,
-        })
-        .from(relayEnvironmentLinks)
-        .where(
-          and(
-            eq(relayEnvironmentLinks.userId, input.userId),
-            eq(relayEnvironmentLinks.environmentId, input.environmentId),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
-        )
-        .limit(1)
-        .pipe(
-          Effect.map((rows) => {
-            const row = rows[0];
-            return row
-              ? {
-                  environmentId: row.environmentId as RelayClientEnvironmentRecord["environmentId"],
-                  label:
-                    row.environmentLabel.trim().length > 0
-                      ? row.environmentLabel
-                      : row.environmentId,
-                  endpoint: {
-                    httpBaseUrl: row.endpointHttpBaseUrl,
-                    wsBaseUrl: row.endpointWsBaseUrl,
-                    providerKind:
-                      row.endpointProviderKind as RelayClientEnvironmentRecord["endpoint"]["providerKind"],
-                  },
-                  environmentPublicKey: row.environmentPublicKey,
-                  linkedAt: row.createdAt,
-                }
-              : null;
-          }),
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkLookupPersistenceError({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
-    }),
-
-    revokeForUser: Effect.fn("relay.environment_links.revoke_for_user")(function* (input) {
-      yield* Effect.annotateCurrentSpan({
-        "relay.environment_id": input.environmentId,
-      });
-      const revokedAt = DateTime.formatIso(yield* DateTime.now);
-      const rows = yield* db
-        .update(relayEnvironmentLinks)
-        .set({
-          revokedAt,
-          updatedAt: revokedAt,
-        })
-        .where(
-          and(
-            eq(relayEnvironmentLinks.userId, input.userId),
-            eq(relayEnvironmentLinks.environmentId, input.environmentId),
-            isNull(relayEnvironmentLinks.revokedAt),
-          ),
-        )
-        .returning({ environmentId: relayEnvironmentLinks.environmentId })
-        .pipe(
-          Effect.mapError(
-            (cause) =>
-              new EnvironmentLinkRevokePersistenceError({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                cause,
-              }),
-          ),
-        );
-      return rows.length > 0;
     }),
   });
 });

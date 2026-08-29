@@ -24,13 +24,9 @@ const config = RelayConfiguration.RelayConfiguration.of({
     bundleId: "com.t3tools.t3code.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
-  clerkSecretKey: Redacted.make("clerk-secret"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  zeropsApiHost: "",
   cloudMintPrivateKey: Redacted.make(keyPair.privateKey),
   cloudMintPublicKey: keyPair.publicKey,
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 });
 
 const layer = RelayTokens.layer.pipe(Layer.provide(RelayConfiguration.layer(config)));
@@ -44,7 +40,6 @@ describe("RelayTokens", () => {
         request: {
           notificationsEnabled: true,
           liveActivitiesEnabled: true,
-          managedTunnelsEnabled: true,
         },
         jti: "challenge-1",
         issuedAtEpochSeconds: 100,
@@ -58,7 +53,6 @@ describe("RelayTokens", () => {
           request: {
             notificationsEnabled: true,
             liveActivitiesEnabled: true,
-            managedTunnelsEnabled: true,
           },
           nowEpochSeconds: 150,
         }),
@@ -70,7 +64,6 @@ describe("RelayTokens", () => {
           request: {
             notificationsEnabled: true,
             liveActivitiesEnabled: true,
-            managedTunnelsEnabled: true,
           },
           nowEpochSeconds: 150,
         }),

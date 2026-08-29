@@ -19,14 +19,11 @@ export class RelayConfiguration extends Context.Service<
   {
     readonly relayIssuer: string;
     readonly apns: ApnsCredentials;
-    readonly clerkSecretKey: Redacted.Redacted<string>;
-    readonly clerkPublishableKey: string;
-    readonly clerkJwtAudience: string;
+    /** Host the Zerops REST API answers on; see `ZeropsAuth.resolveZeropsApiBaseUrl`. */
+    readonly zeropsApiHost: string;
     readonly apnsDeliveryJobSigningSecret: Redacted.Redacted<string>;
     readonly cloudMintPrivateKey: Redacted.Redacted<string>;
     readonly cloudMintPublicKey: string;
-    readonly managedEndpointBaseDomain: string | undefined;
-    readonly managedEndpointNamespace: string | undefined;
   }
 >()("t3code-relay/Config/RelayConfiguration") {}
 

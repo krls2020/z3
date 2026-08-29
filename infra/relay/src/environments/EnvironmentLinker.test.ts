@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import * as DpopProofs from "../auth/DpopProofs.ts";
 import * as RelayTokens from "../auth/RelayTokens.ts";
@@ -18,7 +19,13 @@ import * as EnvironmentCredentials from "./EnvironmentCredentials.ts";
 import * as EnvironmentLinks from "./EnvironmentLinks.ts";
 import * as RelayConfiguration from "../Config.ts";
 import * as EnvironmentLinker from "./EnvironmentLinker.ts";
-import * as ManagedEndpointProvider from "./ManagedEndpointProvider.ts";
+
+const ZEROPS_PROJECT_ID = "project-1";
+const ZEROPS_SUBDOMAIN_HOST = "abcd.prg1.zerops.app";
+const ZEROPS_SERVICE_NAME = "z3";
+const ZEROPS_SERVICE_PORT = 8080;
+const BOUND_ENDPOINT_ORIGIN = `https://${ZEROPS_SERVICE_NAME}-abcd-${ZEROPS_SERVICE_PORT}.prg1.zerops.app`;
+const ZEROPS_TOKEN = "user-zerops-token";
 
 const relayKeyPair = NodeCrypto.generateKeyPairSync("ed25519", {
   privateKeyEncoding: { format: "pem", type: "pkcs8" },
@@ -38,13 +45,9 @@ const config = RelayConfiguration.RelayConfiguration.of({
     bundleId: "com.t3tools.t3code.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-secret"),
-  clerkSecretKey: Redacted.make("clerk-secret"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  zeropsApiHost: "relay-test.zerops.invalid",
   cloudMintPrivateKey: Redacted.make(relayKeyPair.privateKey),
   cloudMintPublicKey: relayKeyPair.publicKey,
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 });
 const isEnvironmentLinkProofInvalid = Schema.is(EnvironmentLinker.EnvironmentLinkProofInvalid);
 
@@ -55,29 +58,22 @@ function signTestJwt(payload: object, typ: string, privateKey: string): string {
   return `${signingInput}.${NodeCrypto.sign(null, Buffer.from(signingInput), privateKey).toString("base64url")}`;
 }
 
-const makeRequest = Effect.gen(function* () {
-  const now = yield* DateTime.now;
-  const expiresAt = DateTime.add(now, { minutes: 5 });
-  const relayTokens = yield* RelayTokens.RelayTokens;
-  const challenge = yield* relayTokens.issueLinkChallenge({
-    userId: "user_123",
-    request: {
-      notificationsEnabled: true,
-      liveActivitiesEnabled: true,
-      managedTunnelsEnabled: true,
-    },
-    jti: "challenge-jti",
-    issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
-    expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
-  });
-  const payload = {
+function makeLinkProofPayload(overrides: {
+  readonly challenge: string;
+  readonly nowSeconds: number;
+  readonly expiresAtSeconds: number;
+  readonly endpoint?: RelayEnvironmentLinkProofPayload["endpoint"];
+  readonly zeropsProjectId?: string;
+  readonly endpointOrigin?: string;
+}): RelayEnvironmentLinkProofPayload {
+  return {
     iss: "t3-env:env-link-test",
     aud: "https://relay.example.test",
     sub: "env-link-test",
     jti: "link-proof-jti",
-    iat: Math.floor(now.epochMilliseconds / 1_000),
-    exp: Math.floor(expiresAt.epochMilliseconds / 1_000),
-    challenge,
+    iat: overrides.nowSeconds,
+    exp: overrides.expiresAtSeconds,
+    challenge: overrides.challenge,
     environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
     descriptor: {
       environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
@@ -87,35 +83,98 @@ const makeRequest = Effect.gen(function* () {
       capabilities: { repositoryIdentity: true },
     },
     environmentPublicKey: environmentKeyPair.publicKey.trim(),
-    endpoint: {
+    endpoint: overrides.endpoint ?? {
       httpBaseUrl: "https://env.example.test/",
       wsBaseUrl: "wss://env.example.test/",
       providerKind: "manual",
     },
     origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
-    scopes: ["agent_activity_notifications", "managed_tunnels"],
-  } satisfies RelayEnvironmentLinkProofPayload;
-  return {
-    request: {
-      proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
-      notificationsEnabled: true,
-      liveActivitiesEnabled: true,
-      managedTunnelsEnabled: false,
-    } satisfies RelayEnvironmentLinkRequest,
-    payload,
+    scopes: ["agent_activity_notifications"],
+    zeropsProjectId: overrides.zeropsProjectId ?? ZEROPS_PROJECT_ID,
+    endpointOrigin: overrides.endpointOrigin ?? BOUND_ENDPOINT_ORIGIN,
   };
-});
+}
+
+const makeRequest = (
+  payloadOverrides?: Partial<
+    Pick<RelayEnvironmentLinkProofPayload, "zeropsProjectId" | "endpointOrigin" | "endpoint">
+  >,
+) =>
+  Effect.gen(function* () {
+    const now = yield* DateTime.now;
+    const expiresAt = DateTime.add(now, { minutes: 5 });
+    const relayTokens = yield* RelayTokens.RelayTokens;
+    const challenge = yield* relayTokens.issueLinkChallenge({
+      userId: "user_123",
+      request: {
+        notificationsEnabled: true,
+        liveActivitiesEnabled: true,
+      },
+      jti: "challenge-jti",
+      issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
+      expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
+    });
+    const payload = makeLinkProofPayload({
+      challenge,
+      nowSeconds: Math.floor(now.epochMilliseconds / 1_000),
+      expiresAtSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
+      ...payloadOverrides,
+    });
+    return {
+      request: {
+        proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
+        notificationsEnabled: true,
+        liveActivitiesEnabled: true,
+      } satisfies RelayEnvironmentLinkRequest,
+      payload,
+    };
+  });
+
+/** A fake Zerops API: member of ZEROPS_PROJECT_ID, one bound service at BOUND_ENDPOINT_ORIGIN. */
+const boundZeropsApiRoute = (url: string): Response => {
+  if (url.endsWith(`/project/${ZEROPS_PROJECT_ID}`)) {
+    return new Response(
+      JSON.stringify({ clientId: "client-1", zeropsSubdomainHost: ZEROPS_SUBDOMAIN_HOST }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+  if (url.endsWith(`/project/${ZEROPS_PROJECT_ID}/service-stack`)) {
+    return new Response(
+      JSON.stringify({
+        list: [
+          {
+            name: ZEROPS_SERVICE_NAME,
+            subdomainAccess: true,
+            ports: [{ port: ZEROPS_SERVICE_PORT, httpSupport: true }],
+          },
+        ],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+  return new Response(JSON.stringify({ message: "unexpected route" }), { status: 500 });
+};
+
+function fakeHttpClientLayer(route: (url: string) => Response) {
+  return Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, route(request.url))),
+    ),
+  );
+}
 
 function testLayer(input?: {
   readonly upsert?: EnvironmentLinks.EnvironmentLinks["Service"]["upsert"];
   readonly consume?: DpopProofs.DpopProofReplay["Service"]["consume"];
-  readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
+  readonly zeropsRoute?: (url: string) => Response;
 }) {
   return EnvironmentLinker.layer.pipe(
     Layer.provideMerge(RelayTokens.layer),
     Layer.provide(
       Layer.mergeAll(
         RelayConfiguration.layer(config),
+        fakeHttpClientLayer(input?.zeropsRoute ?? boundZeropsApiRoute),
         Layer.succeed(DpopProofs.DpopProofReplay, {
           verifyAndConsume: () => Effect.die("unexpected DPoP proof verification"),
           consume: input?.consume ?? (() => Effect.succeed(true)),
@@ -126,28 +185,10 @@ function testLayer(input?: {
           listUsersForEnvironment: () => Effect.succeed([]),
           listDeliveryUsersForEnvironment: () => Effect.succeed([]),
           listPublicKeysForEnvironment: () => Effect.succeed([]),
-          listForUser: () => Effect.succeed([]),
-          getForUser: () => Effect.succeed(null),
-          revokeForUser: () => Effect.succeed(false),
         }),
         Layer.succeed(EnvironmentCredentials.EnvironmentCredentials, {
           create: () => Effect.succeed("t3env_credential_secret"),
           authenticate: () => Effect.succeedNone,
-          revokeForEnvironmentPublicKey: () => Effect.succeed(false),
-        }),
-        Layer.succeed(ManagedEndpointProvider.ManagedEndpointProvider, {
-          prepareDeprovision: () => Effect.succeed(null),
-          deprovision: input?.deprovision ?? (() => Effect.void),
-          release: () => Effect.succeed(true),
-          provision: () =>
-            Effect.succeed({
-              endpoint: {
-                httpBaseUrl: "https://managed.example.test/",
-                wsBaseUrl: "wss://managed.example.test/ws",
-                providerKind: "cloudflare_tunnel",
-              },
-              runtime: { providerKind: "cloudflare_tunnel", connectorToken: "connector-token" },
-            }),
         }),
       ),
     ),
@@ -155,94 +196,155 @@ function testLayer(input?: {
 }
 
 describe("EnvironmentLinker", () => {
-  it.effect("uses verified JWT claims when linking an environment", () => {
-    let persistedEnvironmentId: string | null = null;
+  it.effect(
+    "uses verified JWT claims when linking an environment bound to a Zerops project",
+    () => {
+      let persistedEnvironmentId: string | null = null;
+      let persistedProjectId: string | null = null;
+      return Effect.gen(function* () {
+        const { request, payload } = yield* makeRequest();
+        const linker = yield* EnvironmentLinker.EnvironmentLinker;
+        const result = yield* linker.link({ userId: "user_123", token: ZEROPS_TOKEN, request });
+        expect(result.environmentId).toBe(payload.environmentId);
+        expect(result.endpoint).toEqual(payload.endpoint);
+        expect(result.environmentCredential).toBe("t3env_credential_secret");
+        expect(persistedEnvironmentId).toBe(payload.environmentId);
+        expect(persistedProjectId).toBe(ZEROPS_PROJECT_ID);
+      }).pipe(
+        Effect.provide(
+          testLayer({
+            upsert: (input) =>
+              Effect.sync(() => {
+                persistedEnvironmentId = input.proof.environmentId;
+                persistedProjectId = input.proof.zeropsProjectId;
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("rejects a link when the caller is not a member of the claimed project", () => {
+    let persisted = false;
     return Effect.gen(function* () {
-      const { request, payload } = yield* makeRequest;
+      const { request } = yield* makeRequest();
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* linker.link({ userId: "user_123", request });
-      expect(result.environmentId).toBe(payload.environmentId);
-      expect(result.environmentCredential).toBe("t3env_credential_secret");
-      expect(persistedEnvironmentId).toBe(payload.environmentId);
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", token: ZEROPS_TOKEN, request }),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(result.failure).toMatchObject({
+          _tag: "EnvironmentLinkNotAuthorized",
+          userId: "user_123",
+          environmentId: "env-link-test",
+        });
+      }
+      expect(persisted).toBe(false);
     }).pipe(
       Effect.provide(
         testLayer({
-          upsert: (input) =>
-            Effect.sync(() => {
-              persistedEnvironmentId = input.proof.environmentId;
-            }),
+          upsert: () => Effect.sync(() => (persisted = true)),
+          zeropsRoute: (url) =>
+            url.endsWith(`/project/${ZEROPS_PROJECT_ID}`)
+              ? new Response(null, { status: 403 })
+              : new Response(JSON.stringify({ message: "unexpected route" }), { status: 500 }),
         }),
       ),
     );
   });
 
-  it.effect("links a publish-only environment with a non-secure nominal endpoint", () => {
-    let persistedEndpoint: string | null = null;
-    let deprovisionedEnvironmentId: string | null = null;
+  it.effect("rejects a link claiming a Zerops project the platform does not know", () => {
+    let persisted = false;
     return Effect.gen(function* () {
-      const now = yield* DateTime.now;
-      const expiresAt = DateTime.add(now, { minutes: 5 });
-      const relayTokens = yield* RelayTokens.RelayTokens;
-      const challenge = yield* relayTokens.issueLinkChallenge({
-        userId: "user_123",
-        request: {
-          notificationsEnabled: true,
-          liveActivitiesEnabled: true,
-          managedTunnelsEnabled: false,
-        },
-        jti: "publish-only-challenge-jti",
-        issuedAtEpochSeconds: Math.floor(now.epochMilliseconds / 1_000),
-        expiresAtEpochSeconds: Math.floor(expiresAt.epochMilliseconds / 1_000),
-      });
-      const payload = {
-        iss: "t3-env:env-link-test",
-        aud: "https://relay.example.test",
-        sub: "env-link-test",
-        jti: "publish-only-proof-jti",
-        iat: Math.floor(now.epochMilliseconds / 1_000),
-        exp: Math.floor(expiresAt.epochMilliseconds / 1_000),
-        challenge,
-        environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-        descriptor: {
-          environmentId: "env-link-test" as RelayEnvironmentLinkProofPayload["environmentId"],
-          label: "Link Test Environment",
-          platform: { os: "darwin", arch: "arm64" },
-          serverVersion: "0.0.0-test",
-          capabilities: { repositoryIdentity: true },
-        },
-        environmentPublicKey: environmentKeyPair.publicKey.trim(),
+      const { request } = yield* makeRequest();
+      const linker = yield* EnvironmentLinker.EnvironmentLinker;
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", token: ZEROPS_TOKEN, request }),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);
+        if (isEnvironmentLinkProofInvalid(result.failure)) {
+          expect(result.failure).toMatchObject({
+            userId: "user_123",
+            environmentId: "env-link-test",
+            reason: "zerops_project_not_bound",
+            stage: "verify_zerops_binding",
+          });
+        }
+      }
+      expect(persisted).toBe(false);
+    }).pipe(
+      Effect.provide(
+        testLayer({
+          upsert: () => Effect.sync(() => (persisted = true)),
+          zeropsRoute: () => new Response(null, { status: 404 }),
+        }),
+      ),
+    );
+  });
+
+  it.effect(
+    "rejects a link whose endpoint origin belongs to no service of the claimed project",
+    () => {
+      let persisted = false;
+      return Effect.gen(function* () {
+        const { request } = yield* makeRequest({
+          endpointOrigin: "https://not-a-real-service.example.test",
+        });
+        const linker = yield* EnvironmentLinker.EnvironmentLinker;
+        const result = yield* Effect.result(
+          linker.link({ userId: "user_123", token: ZEROPS_TOKEN, request }),
+        );
+        expect(Result.isFailure(result)).toBe(true);
+        if (Result.isFailure(result)) {
+          expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);
+          if (isEnvironmentLinkProofInvalid(result.failure)) {
+            expect(result.failure).toMatchObject({
+              reason: "zerops_project_not_bound",
+              stage: "verify_zerops_binding",
+            });
+          }
+        }
+        expect(persisted).toBe(false);
+      }).pipe(Effect.provide(testLayer({ upsert: () => Effect.sync(() => (persisted = true)) })));
+    },
+  );
+
+  it.effect("rejects a link whose declared endpoint is not HTTPS/WSS", () => {
+    let persisted = false;
+    return Effect.gen(function* () {
+      const { request } = yield* makeRequest({
         endpoint: {
           httpBaseUrl: "http://127.0.0.1:3773/",
           wsBaseUrl: "ws://127.0.0.1:3773/",
           providerKind: "manual",
         },
-        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
-        scopes: ["agent_activity_notifications"],
-      } satisfies RelayEnvironmentLinkProofPayload;
-      const request = {
-        proof: signTestJwt(payload, RELAY_LINK_PROOF_TYP, environmentKeyPair.privateKey),
-        notificationsEnabled: true,
-        liveActivitiesEnabled: true,
-        managedTunnelsEnabled: false,
-      } satisfies RelayEnvironmentLinkRequest;
+      });
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* linker.link({ userId: "user_123", request });
-      expect(result.environmentCredential).toBe("t3env_credential_secret");
-      expect(result.endpointRuntime).toBeNull();
-      expect(persistedEndpoint).toBe("http://127.0.0.1:3773/");
-      // Downgrading from a managed link must release the previously provisioned
-      // tunnel; nothing else cleans it up before a full unlink.
-      expect(deprovisionedEnvironmentId).toBe("env-link-test");
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", token: ZEROPS_TOKEN, request }),
+      );
+      expect(Result.isFailure(result)).toBe(true);
+      if (Result.isFailure(result)) {
+        expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);
+        if (isEnvironmentLinkProofInvalid(result.failure)) {
+          expect(result.failure).toMatchObject({
+            userId: "user_123",
+            environmentId: "env-link-test",
+            reason: "endpoint_not_secure",
+            stage: "validate_endpoint",
+          });
+        }
+      }
+      expect(persisted).toBe(false);
     }).pipe(
       Effect.provide(
         testLayer({
-          upsert: (input) =>
+          upsert: () =>
             Effect.sync(() => {
-              persistedEndpoint = input.endpoint.httpBaseUrl;
-            }),
-          deprovision: (input) =>
-            Effect.sync(() => {
-              deprovisionedEnvironmentId = input.environmentId;
+              persisted = true;
             }),
         }),
       ),
@@ -252,13 +354,15 @@ describe("EnvironmentLinker", () => {
   it.effect("rejects a tampered compact proof before persistence", () => {
     let persisted = false;
     return Effect.gen(function* () {
-      const { request } = yield* makeRequest;
+      const { request } = yield* makeRequest();
       const segments = request.proof.split(".");
       const signature = segments[2]!;
       segments[2] = `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
       const tampered = { ...request, proof: segments.join(".") };
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* Effect.result(linker.link({ userId: "user_123", request: tampered }));
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", token: ZEROPS_TOKEN, request: tampered }),
+      );
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
         expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);
@@ -287,9 +391,11 @@ describe("EnvironmentLinker", () => {
 
   it.effect("rejects replayed JWT ids", () =>
     Effect.gen(function* () {
-      const { request } = yield* makeRequest;
+      const { request } = yield* makeRequest();
       const linker = yield* EnvironmentLinker.EnvironmentLinker;
-      const result = yield* Effect.result(linker.link({ userId: "user_123", request }));
+      const result = yield* Effect.result(
+        linker.link({ userId: "user_123", token: ZEROPS_TOKEN, request }),
+      );
       expect(Result.isFailure(result)).toBe(true);
       if (Result.isFailure(result)) {
         expect(isEnvironmentLinkProofInvalid(result.failure)).toBe(true);
