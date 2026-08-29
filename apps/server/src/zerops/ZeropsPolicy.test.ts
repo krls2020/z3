@@ -11,7 +11,7 @@ import * as ServerConfig from "../config.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
+import { ProviderRegistryTest } from "../spi/ProviderRegistryTest.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
@@ -180,7 +180,7 @@ const managerLayer = (driver: Layer.Layer<GitVcsDriver.GitVcsDriver>) =>
   Layer.mergeAll(
     driver,
     Layer.mock(TextGeneration.TextGeneration)({} as never),
-    Layer.mock(ProviderRegistry.ProviderRegistry)({ getProviders: Effect.succeed([]) } as never),
+    ProviderRegistryTest.empty(),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
       runForThread: () => Effect.succeed({ status: "no-script" as const }),
     } as never),

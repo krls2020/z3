@@ -148,16 +148,13 @@ it.layer(NodeServices.layer)("z3 zone architecture", (it) => {
           );
         }
 
-        // Owned by the SPI slice (methodology §3.2): the lifecycle/topology
-        // feeds and their test fixture reach ProviderService/
-        // ProviderRegistry directly today. Emptying this list is that
-        // slice's job, not this test's — a new violation elsewhere in
-        // apps/server/src/zerops/** still fails here.
-        const KNOWN_OWNED_PRODUCT_PROVIDER_VIOLATIONS = [
-          "apps/server/src/zerops/ZeropsLifecycle.ts",
-          "apps/server/src/zerops/ZeropsPolicy.test.ts",
-          "apps/server/src/zerops/ZeropsTopology.ts",
-        ].sort();
+        // Emptied by the SPI slice (methodology §3.2): the lifecycle/topology
+        // feeds now reach providers only through
+        // apps/server/src/spi/ProviderRuntimeEventBus.ts, and
+        // ZeropsPolicy.test.ts's incidental ProviderRegistry dependency goes
+        // through apps/server/src/spi/ProviderRegistryTest.ts. A new
+        // violation anywhere in apps/server/src/zerops/** still fails here.
+        const KNOWN_OWNED_PRODUCT_PROVIDER_VIOLATIONS: ReadonlyArray<string> = [];
 
         const zeropsDir = path.join(root, "apps/server/src/zerops");
         const files = yield* collectTsFiles(zeropsDir);
