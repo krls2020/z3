@@ -32,6 +32,34 @@ const waitFor = async (predicate: () => boolean, timeoutMs = 2000): Promise<void
   }
 };
 
+/**
+ * Polls for `predicate`, firing `nudge()` once if it hasn't happened by
+ * `nudgeAfterMs`. A single fs write's "change" notification can be delayed
+ * or dropped entirely under system load — macOS FSEvents coalescing is not
+ * fully deterministic — so this gives the watcher a second, distinctly
+ * payloaded event to react to well before giving up, rather than trusting
+ * one write alone against a longer fixed wait.
+ */
+const waitForWithNudge = async (
+  predicate: () => boolean,
+  nudge: () => void,
+  { nudgeAfterMs = 1500, timeoutMs = 5000 }: { nudgeAfterMs?: number; timeoutMs?: number } = {},
+): Promise<void> => {
+  const start = Date.now();
+  let nudged = false;
+  while (!predicate()) {
+    const elapsed = Date.now() - start;
+    if (!nudged && elapsed >= nudgeAfterMs) {
+      nudge();
+      nudged = true;
+    }
+    if (elapsed > timeoutMs) {
+      throw new Error("waitForWithNudge: timed out");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
+
 describe("watchWithFallback", () => {
   it("fires when the target file already exists and changes", async () => {
     const target = path.join(root, "auth.json");
@@ -42,7 +70,10 @@ describe("watchWithFallback", () => {
     });
     try {
       fs.writeFileSync(target, '{"changed":true}');
-      await waitFor(() => fired > 0);
+      await waitForWithNudge(
+        () => fired > 0,
+        () => fs.writeFileSync(target, '{"changed":true,"nudge":true}'),
+      );
       expect(fired).toBeGreaterThan(0);
     } finally {
       handle.dispose();
