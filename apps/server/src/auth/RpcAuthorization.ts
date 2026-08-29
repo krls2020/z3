@@ -100,6 +100,11 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.zeropsLifecycleGet]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeZeropsLifecycle]: AuthOrchestrationReadScope,
   [WS_METHODS.subscribeZeropsAgentAuth]: AuthOrchestrationReadScope,
+  // A login session runs a real command in a real terminal on the user's
+  // behalf — the same authority as `terminal.write`/`terminal.open`, not a
+  // read.
+  [WS_METHODS.zeropsAgentLoginStart]: AuthTerminalOperateScope,
+  [WS_METHODS.zeropsAgentLoginCancel]: AuthTerminalOperateScope,
   [WS_METHODS.vcsRefreshStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.vcsPull]: AuthOrchestrationOperateScope,
   [WS_METHODS.gitRunStackedAction]: AuthOrchestrationOperateScope,

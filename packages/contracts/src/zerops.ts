@@ -343,6 +343,50 @@ export const ZeropsAgentAuthState = Schema.Literals([
 ]);
 export type ZeropsAgentAuthState = typeof ZeropsAgentAuthState.Type;
 
+/**
+ * Where a server-driven login attempt currently stands, reduced from the
+ * agent CLI's own terminal output (S7 follow-up F8 — `ZeropsAgentLogin`,
+ * ported from the Zerops GUI's `zcp-agent-auth-dialog` walker):
+ *
+ * - `starting` — the terminal is being opened; the login command has not
+ *   been written yet.
+ * - `menu` — the command is running; the server is auto-navigating whatever
+ *   the CLI prints (a Y/N confirmation, a login-method picker, or any other
+ *   unrecognized screen) the same way a user pressing Enter through it
+ *   would, until a URL, a "paste code" prompt, success, or failure appears.
+ * - `awaiting-browser` — an auth URL (and, for Codex, its device code) was
+ *   found; the user needs to open it (or copy the code) in their own
+ *   browser.
+ * - `awaiting-code` — the CLI is now showing a "paste code here" prompt
+ *   (Claude only); the user pastes the code directly into the terminal
+ *   pane — it never crosses the wire as a field.
+ * - `succeeded` / `failed` / `cancelled` — terminal states.
+ */
+export const ZeropsAgentLoginPhase = Schema.Literals([
+  "starting",
+  "menu",
+  "awaiting-browser",
+  "awaiting-code",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+export type ZeropsAgentLoginPhase = typeof ZeropsAgentLoginPhase.Type;
+
+export const ZeropsAgentLoginState = Schema.Struct({
+  phase: ZeropsAgentLoginPhase,
+  /** The auth URL, once the terminal has printed a complete one. */
+  url: Schema.optional(Schema.String),
+  /** The device code (Codex's device-auth flow only). */
+  code: Schema.optional(Schema.String),
+  /** A human-readable detail for `failed` — never a credential value. */
+  message: Schema.optional(Schema.String),
+  /** The dedicated terminal this login session runs in (`terminal.attach`/`terminal.write` target). */
+  terminalId: Schema.String,
+  startedAt: Schema.DateTimeUtc,
+});
+export type ZeropsAgentLoginState = typeof ZeropsAgentLoginState.Type;
+
 export const ZeropsAgentAuth = Schema.Struct({
   agentId: ZeropsAgentId,
   /** Whether the local credential artifact exists. Presence only — its contents are never read. */
@@ -362,6 +406,8 @@ export const ZeropsAgentAuth = Schema.Struct({
    */
   providerAuth: ServerProviderAuthStatus,
   state: ZeropsAgentAuthState,
+  /** A server-driven login attempt in progress (or just finished) for this agent — see {@link ZeropsAgentLoginState}. Absent when none has ever run this process's lifetime. */
+  login: Schema.optional(ZeropsAgentLoginState),
 });
 export type ZeropsAgentAuth = typeof ZeropsAgentAuth.Type;
 
@@ -376,3 +422,54 @@ export const ZeropsAgentAuthSnapshot = Schema.Struct({
   agents: Schema.Array(ZeropsAgentAuth),
 });
 export type ZeropsAgentAuthSnapshot = typeof ZeropsAgentAuthSnapshot.Type;
+
+// ---------------------------------------------------------------------------
+// Agent login — S7 follow-up F8
+// ---------------------------------------------------------------------------
+
+/**
+ * The command each agent CLI runs to start an interactive login, typed into
+ * its dedicated terminal by the SERVER (`ZeropsAgentLogin`, ported from the
+ * Zerops GUI's `zcp-agent-auth-dialog` walker) — never by the client. Moved
+ * here (off the web-only `agentLogin.ts` this replaces) because the value
+ * now belongs to whichever side actually runs the command.
+ */
+export const ZEROPS_AGENT_LOGIN_COMMANDS: Readonly<Record<ZeropsAgentId, string>> = {
+  "claude-code": "claude /login",
+  codex: "codex login --device-auth",
+};
+
+export const ZeropsAgentLoginStartInput = Schema.Struct({
+  agentId: ZeropsAgentId,
+  threadId: ThreadId,
+});
+export type ZeropsAgentLoginStartInput = typeof ZeropsAgentLoginStartInput.Type;
+
+export const ZeropsAgentLoginStartResult = Schema.Struct({
+  terminalId: Schema.String,
+});
+export type ZeropsAgentLoginStartResult = typeof ZeropsAgentLoginStartResult.Type;
+
+export const ZeropsAgentLoginCancelInput = Schema.Struct({
+  agentId: ZeropsAgentId,
+});
+export type ZeropsAgentLoginCancelInput = typeof ZeropsAgentLoginCancelInput.Type;
+
+export const ZeropsAgentLoginErrorReason = Schema.Literals([
+  /** This environment does not offer a server-driven login (not a Zerops environment). */
+  "unavailable",
+]);
+export type ZeropsAgentLoginErrorReason = typeof ZeropsAgentLoginErrorReason.Type;
+
+/** Mirrors `ExecError` (`exec.ts`) — this RPC performs a real action, so "not a Zerops environment" is a failure, not a feed value. */
+export class ZeropsAgentLoginError extends Schema.TaggedErrorClass<ZeropsAgentLoginError>()(
+  "ZeropsAgentLoginError",
+  {
+    reason: ZeropsAgentLoginErrorReason,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}

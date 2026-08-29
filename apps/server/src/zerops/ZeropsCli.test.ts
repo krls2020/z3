@@ -101,7 +101,11 @@ describe("ZeropsCli.markAgentOAuth", () => {
         ),
         (cli) => cli.markAgentOAuth("claude-code"),
       );
-      expect(result).toEqual({ key: "ZCP_AGENT_OAUTH_CLAUDE_CODE", changed: true });
+      expect(result).toEqual({
+        key: "ZCP_AGENT_OAUTH_CLAUDE_CODE",
+        changed: true,
+        migrated: false,
+      });
     }),
   );
 

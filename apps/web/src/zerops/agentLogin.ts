@@ -1,37 +1,21 @@
 /**
- * Agent CLI login, driven from z3's own terminal — S7 plan D4.
+ * Agent CLI login presentation — S7 plan D4, server-driven since follow-up
+ * F8.
  *
- * The card's "Sign in" button never calls a Zerops API: it types the agent
- * CLI's own login command into z3's terminal and lets the CLI's own flow
- * (a URL, a device code, whatever it prints) carry the user the rest of the
- * way. z3's Ghostty terminal regex-links a plain `https://…` line, so the
- * OAuth URL these commands print is already clickable — nothing
- * credential-shaped ever has to enter the chat.
- *
- * Command strings are lifted verbatim from the Zerops GUI's own walker
- * (`zcp-agent-auth-dialog.handlers.ts:145,174`), which hit the same
- * constraint this card has to work around: plain `codex login` opens a
- * `localhost:1455` OAuth callback the CLI's own machine can reach but a
- * browser on the user's laptop cannot, so Codex needs the device-auth flow
- * instead of its default.
+ * The card's "Sign in" button no longer types anything into a terminal
+ * itself: it asks the server (`ZeropsAgentLogin`, `zerops.agentLogin.start`)
+ * to run the agent CLI's own login command in a dedicated terminal and walk
+ * its output. What the user needs to act on rides back on the same
+ * `ZeropsAgentAuth` row, in the optional `login` field — this module is the
+ * pure classification of that field into what the card renders, mirroring
+ * `classifyAgentAuth`'s own shape so a state can never get a label from one
+ * branch and a button from another.
  */
 import type {
-  ScopedThreadRef,
-  TerminalOpenInput,
-  TerminalWriteInput,
   ZeropsAgentAuth,
   ZeropsAgentAuthSnapshot,
-  ZeropsAgentId,
+  ZeropsAgentLoginState,
 } from "@t3tools/contracts";
-
-export const AGENT_LOGIN_COMMANDS: Record<ZeropsAgentId, string> = {
-  "claude-code": "claude /login",
-  codex: "codex login --device-auth",
-};
-
-export function agentLoginCommand(agentId: ZeropsAgentId): string {
-  return AGENT_LOGIN_COMMANDS[agentId];
-}
 
 type AgentAuthFields = Pick<ZeropsAgentAuth, "credPresent" | "providerAuth" | "state">;
 
@@ -117,58 +101,89 @@ export function agentAuthAction(agent: AgentAuthFields): ZeropsAgentAuthAction {
   }
 }
 
-/** Where the login terminal opens — the sshfs-mounted project root every z3 terminal defaults to. */
-const AGENT_LOGIN_CWD = "/var/www";
-
-/** Terminal id the login flow reuses: z3's primary shell (`terminalUiStateStore`'s default). */
-const AGENT_LOGIN_TERMINAL_ID = "term-1";
-
-export interface AgentLoginTerminalPlan {
-  readonly terminalId: string;
-  readonly openInput: TerminalOpenInput;
-  readonly writeInput: TerminalWriteInput;
-}
+// ---------------------------------------------------------------------------
+// Server-driven login session (S7 follow-up F8)
+// ---------------------------------------------------------------------------
 
 /**
- * The three-call terminal move (`setTerminalOpen` → open → write) needs an
- * open payload and a write payload; this is the pure half of that move —
- * everything decided without touching React or the RPC layer, so it can be
- * asserted directly. `useAgentLogin` is the thin wrapper that actually fires
- * the calls this returns.
+ * What the card renders for an in-progress (or just-finished) server-driven
+ * login session. `"none"` — no session, or a `cancelled` one (equivalent to
+ * having none: the user can start a fresh one) — means the row falls back
+ * to the baseline `agentAuthLabel`/`agentAuthAction` classification above.
  */
-export function buildAgentLoginTerminalPlan(
-  threadRef: ScopedThreadRef,
-  agentId: ZeropsAgentId,
-): AgentLoginTerminalPlan {
-  const terminalId = AGENT_LOGIN_TERMINAL_ID;
-  return {
-    terminalId,
-    openInput: {
-      threadId: threadRef.threadId,
-      terminalId,
-      cwd: AGENT_LOGIN_CWD,
-    },
-    writeInput: {
-      threadId: threadRef.threadId,
-      terminalId,
-      // `\r`, not `\n` — the same terminator `runProjectScript` uses
-      // (`ChatView.tsx`'s `${script.command}\r`) to submit a typed command.
-      data: `${agentLoginCommand(agentId)}\r`,
-    },
-  };
+export type ZeropsAgentLoginPresentation =
+  | { readonly kind: "none" }
+  | { readonly kind: "starting" }
+  | { readonly kind: "menu" }
+  | {
+      readonly kind: "awaiting-browser";
+      readonly url: string | undefined;
+      readonly code: string | undefined;
+    }
+  | { readonly kind: "awaiting-code" }
+  | { readonly kind: "succeeded" }
+  | { readonly kind: "failed"; readonly message: string | undefined };
+
+export function classifyAgentLogin(
+  login: ZeropsAgentLoginState | undefined,
+): ZeropsAgentLoginPresentation {
+  if (login === undefined || login.phase === "cancelled") {
+    return { kind: "none" };
+  }
+  switch (login.phase) {
+    case "starting":
+      return { kind: "starting" };
+    case "menu":
+      return { kind: "menu" };
+    case "awaiting-browser":
+      return { kind: "awaiting-browser", url: login.url, code: login.code };
+    case "awaiting-code":
+      return { kind: "awaiting-code" };
+    case "succeeded":
+      return { kind: "succeeded" };
+    case "failed":
+      return { kind: "failed", message: login.message };
+  }
+}
+
+/** The text label for every login-session phase except `awaiting-browser`, which renders structured actions instead (see the card). */
+export function agentLoginLabel(presentation: ZeropsAgentLoginPresentation): string {
+  switch (presentation.kind) {
+    case "none":
+      return "";
+    case "starting":
+      return "Starting…";
+    case "menu":
+      return "Choosing “Claude account with subscription”…";
+    case "awaiting-browser":
+      return "Waiting for you to finish signing in";
+    case "awaiting-code":
+      return "Paste the code into the terminal below";
+    case "succeeded":
+      return "Authorized";
+    case "failed":
+      return presentation.message ?? "Sign-in failed";
+  }
 }
 
 /**
  * Whether the card is worth showing at all: the feed has to be available
  * (this is a Zerops environment) and at least one agent has to need the
  * user's attention. Only the fully-`authorized` classification (state says
- * authorized AND the live provider check agrees) doesn't — notably, an
- * agent whose `state` says `authorized*` but whose `providerAuth` disagrees
- * still counts, or the user would never learn they need to re-auth.
+ * authorized AND the live provider check agrees, with no login session
+ * actively running) doesn't — notably, an agent whose `state` says
+ * `authorized*` but whose `providerAuth` disagrees still counts, or the
+ * user would never learn they need to re-auth; likewise an agent mid-login
+ * (menu/awaiting-browser/awaiting-code) keeps the card visible even if its
+ * baseline `state` still reads "authorized" from a previous session.
  */
 export function zeropsAgentAuthNeedsAttention(snapshot: ZeropsAgentAuthSnapshot): boolean {
   return (
     snapshot.available &&
-    snapshot.agents.some((agent) => classifyAgentAuth(agent).kind !== "authorized")
+    snapshot.agents.some(
+      (agent) =>
+        classifyAgentAuth(agent).kind !== "authorized" ||
+        classifyAgentLogin(agent.login).kind !== "none",
+    )
   );
 }

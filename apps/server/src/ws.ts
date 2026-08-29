@@ -121,6 +121,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as ZeropsAgentAuth from "./zerops/ZeropsAgentAuth.ts";
+import * as ZeropsAgentLoginModule from "./zerops/ZeropsAgentLogin.ts";
 import * as ZeropsLifecycle from "./zerops/ZeropsLifecycle.ts";
 import * as ZeropsTopology from "./zerops/ZeropsTopology.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -561,6 +562,7 @@ const makeWsRpcLayer = (
       const zeropsTopology = yield* ZeropsTopology.ZeropsTopology;
       const zeropsLifecycle = yield* ZeropsLifecycle.ZeropsLifecycle;
       const zeropsAgentAuth = yield* ZeropsAgentAuth.ZeropsAgentAuth;
+      const zeropsAgentLogin = yield* ZeropsAgentLoginModule.ZeropsAgentLogin;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -1792,6 +1794,18 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.zeropsLifecycleGet, zeropsLifecycle.get(input.threadId), {
             "rpc.aggregate": "zerops",
           }),
+        [WS_METHODS.zeropsAgentLoginStart]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.zeropsAgentLoginStart,
+            zeropsAgentLogin.start(input.agentId, input.threadId),
+            { "rpc.aggregate": "zerops" },
+          ),
+        [WS_METHODS.zeropsAgentLoginCancel]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.zeropsAgentLoginCancel,
+            zeropsAgentLogin.cancel(input.agentId),
+            { "rpc.aggregate": "zerops" },
+          ),
         [WS_METHODS.serverSignalProcess]: (input) =>
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
@@ -2541,10 +2555,36 @@ const makeWsRpcLayer = (
         [WS_METHODS.subscribeZeropsAgentAuth]: (_input) =>
           observeRpcStream(
             WS_METHODS.subscribeZeropsAgentAuth,
+            // Merges `ZeropsAgentAuth`'s snapshot with `ZeropsAgentLogin`'s
+            // per-agent login state (S7 follow-up F8) into the ONE stream
+            // the client reads. Subscribing to both FIRST (each returning
+            // its own value-at-subscribe-time bundled with a live change
+            // stream — the same subscribe-before-snapshot race the two
+            // feeds' own `subscribe` already guards against) avoids a gap
+            // between reading an initial value and starting to listen; a
+            // later change from EITHER source re-reads both feeds' `latest`
+            // fresh rather than trusting a stale captured value, since a
+            // `Stream.merge`'d change only tells us SOMETHING moved, not
+            // which side.
             Stream.unwrap(
-              Effect.map(zeropsAgentAuth.subscribe, ({ latest, changes }) =>
-                Stream.concat(Stream.make(latest), changes),
-              ),
+              Effect.gen(function* () {
+                const authSub = yield* zeropsAgentAuth.subscribe;
+                const loginSub = yield* zeropsAgentLogin.subscribe;
+                const recombine = Effect.zip(zeropsAgentAuth.latest, zeropsAgentLogin.latest).pipe(
+                  Effect.map(([snapshot, logins]) =>
+                    ZeropsAgentLoginModule.mergeAgentAuthLogin(snapshot, logins),
+                  ),
+                );
+                const initial = ZeropsAgentLoginModule.mergeAgentAuthLogin(
+                  authSub.latest,
+                  loginSub.latest,
+                );
+                const changes = Stream.merge(
+                  Stream.map(authSub.changes, () => undefined),
+                  Stream.map(loginSub.changes, () => undefined),
+                ).pipe(Stream.mapEffect(() => recombine));
+                return Stream.concat(Stream.make(initial), changes);
+              }),
             ),
             { "rpc.aggregate": "zerops" },
           ),

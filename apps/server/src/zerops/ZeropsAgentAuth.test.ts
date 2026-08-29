@@ -1,16 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { agentDefaultInstanceId, buildSnapshot, computeAgentAuthState } from "./ZeropsAgentAuth.ts";
+import { buildSnapshot, computeAgentAuthState } from "./ZeropsAgentAuth.ts";
 
-describe("agentDefaultInstanceId", () => {
-  it("maps claude-code to the claudeAgent driver's default instance", () => {
-    expect(agentDefaultInstanceId("claude-code")).toBe("claudeAgent");
-  });
-
-  it("maps codex to the codex driver's default instance", () => {
-    expect(agentDefaultInstanceId("codex")).toBe("codex");
-  });
-});
+// `agentDefaultInstanceId` moved to `../spi/providerInstances.ts` (owned SPI
+// capability — this module no longer imports `provider/**` at all,
+// methodology §3.2); its own tests moved to `providerInstances.test.ts`.
 
 // The §3 W-STATE matrix (docs/spec-welcome-mode.md), pinned verbatim against
 // `vscode-bootstrap-welcome.js`'s `computeAgentState`. `credVerifiable` is
