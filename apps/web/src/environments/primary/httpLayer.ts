@@ -1,9 +1,8 @@
 import { remoteHttpClientLayer } from "@t3tools/client-runtime/rpc";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/unstable/http";
 
-import { readDesktopPrimaryBearerToken } from "./desktopAuth";
 import { resolvePrimaryEnvironmentHttpUrl } from "./target";
 
 function isSameOriginBrowserPrimary(): boolean {
@@ -18,37 +17,20 @@ function isSameOriginBrowserPrimary(): boolean {
   return new URL(resolvePrimaryEnvironmentHttpUrl("/")).origin === window.location.origin;
 }
 
-function withPrimaryBearerToken(client: HttpClient.HttpClient): HttpClient.HttpClient {
-  return client.pipe(
-    HttpClient.mapRequestEffect((request) =>
-      Effect.promise(readDesktopPrimaryBearerToken).pipe(
-        Effect.map((bearerToken) =>
-          bearerToken ? HttpClientRequest.bearerToken(request, bearerToken) : request,
-        ),
-      ),
-    ),
-  );
-}
-
 export function makePrimaryEnvironmentHttpLayer() {
   return Layer.unwrap(
     Effect.sync(() => {
       const baseLayer = remoteHttpClientLayer(globalThis.fetch);
-      if (isSameOriginBrowserPrimary()) {
-        return Layer.merge(
-          baseLayer,
-          Layer.succeed(FetchHttpClient.RequestInit, { credentials: "include" }),
-        );
-      }
-
-      const bearerClientLayer = Layer.effect(
-        HttpClient.HttpClient,
-        Effect.map(HttpClient.HttpClient, withPrimaryBearerToken),
-      ).pipe(Layer.provide(baseLayer));
-
+      // Same-origin browser primaries (self-hosted deployments) authenticate
+      // with the session cookie; every other primary target (including the
+      // desktop app, which always reaches a primary cross-origin) carries no
+      // cookie and no bearer credential here — its auth, if any, is handled
+      // by the connection/pairing flow instead.
       return Layer.merge(
-        bearerClientLayer,
-        Layer.succeed(FetchHttpClient.RequestInit, { credentials: "omit" }),
+        baseLayer,
+        Layer.succeed(FetchHttpClient.RequestInit, {
+          credentials: isSameOriginBrowserPrimary() ? "include" : "omit",
+        }),
       );
     }),
   );

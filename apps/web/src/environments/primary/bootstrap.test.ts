@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   getPrimaryKnownEnvironment,
-  isDesktopEnvironmentBootstrapIncompleteError,
   isPrimaryEnvironmentProtocolUnsupportedError,
   isPrimaryEnvironmentUrlInvalidError,
   readPrimaryEnvironmentTarget,
@@ -253,33 +252,6 @@ describe("environmentBootstrap", () => {
     );
   });
 
-  it("uses the vite proxy for desktop-managed loopback descriptor requests during local dev", async () => {
-    vi.stubEnv("VITE_DEV_SERVER_URL", "http://127.0.0.1:5733");
-    vi.stubGlobal("window", {
-      location: new URL("http://127.0.0.1:5733/"),
-      history: {
-        replaceState: vi.fn(),
-      },
-      desktopBridge: {
-        getLocalEnvironmentBootstraps: () => [
-          {
-            id: "primary",
-            label: "Windows",
-            httpBaseUrl: "http://127.0.0.1:3773",
-            wsBaseUrl: "ws://127.0.0.1:3773",
-            bootstrapToken: "desktop-bootstrap-token",
-          },
-        ],
-      },
-    });
-    await installDescriptorApi();
-
-    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
-    expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
-      "http://127.0.0.1:5733/.well-known/t3/environment",
-    );
-  });
-
   it("retains the URL parser cause without exposing the configured URL in its message", () => {
     vi.stubEnv("VITE_HTTP_URL", "http://[");
 
@@ -296,35 +268,6 @@ describe("environmentBootstrap", () => {
     });
     expect(error.cause).toBeInstanceOf(TypeError);
     expect(error.message).not.toContain("http://[");
-  });
-
-  it("describes which desktop bootstrap endpoint is missing", () => {
-    vi.stubGlobal("window", {
-      location: new URL("http://127.0.0.1:5733/"),
-      history: { replaceState: vi.fn() },
-      desktopBridge: {
-        getLocalEnvironmentBootstraps: () => [
-          {
-            id: "primary",
-            label: "Local environment",
-            httpBaseUrl: "http://127.0.0.1:3773",
-            bootstrapToken: "desktop-bootstrap-token",
-          },
-        ],
-      },
-    });
-
-    const error = captureThrown(readPrimaryEnvironmentTarget);
-
-    expect(isDesktopEnvironmentBootstrapIncompleteError(error)).toBe(true);
-    if (!isDesktopEnvironmentBootstrapIncompleteError(error)) {
-      throw new Error("Expected a structured desktop bootstrap error.");
-    }
-    expect(error).toMatchObject({
-      hasHttpBaseUrl: true,
-      hasWsBaseUrl: false,
-      message: "Desktop bootstrap is missing wsBaseUrl for the local environment.",
-    });
   });
 
   it("preserves an unsupported window-origin protocol", () => {

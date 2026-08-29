@@ -25,7 +25,6 @@ export {
   peekPairingTokenFromUrl,
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,
-  reauthenticatePrimaryEnvironment,
   resolveInitialServerAuthGateState,
   revokeOtherServerClientSessions,
   revokeServerClientSession,
@@ -43,8 +42,6 @@ export { refreshPrimarySessionState, usePrimarySessionState } from "./sessionSta
 export { PrimaryEnvironmentHttpClient } from "./httpClient";
 
 export {
-  DesktopEnvironmentBootstrapIncompleteError,
-  isDesktopEnvironmentBootstrapIncompleteError,
   isPrimaryEnvironmentProtocolUnsupportedError,
   isPrimaryEnvironmentUrlInvalidError,
   PrimaryEnvironmentProtocolUnsupportedError,
