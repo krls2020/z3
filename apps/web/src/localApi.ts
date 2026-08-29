@@ -10,10 +10,6 @@ let cachedApi: LocalApi | undefined;
 function createBrowserLocalApi(): LocalApi {
   return {
     dialogs: {
-      pickFolder: async (options) => {
-        if (!window.desktopBridge) return null;
-        return window.desktopBridge.pickFolder(options);
-      },
       confirm: async (message, options?: ConfirmDialogOptions) => {
         return requestConfirmDialog(message, options) ?? false;
       },
