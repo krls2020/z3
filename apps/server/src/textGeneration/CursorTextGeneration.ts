@@ -22,10 +22,7 @@ import {
   sanitizePrTitle,
   sanitizeThreadTitle,
 } from "./TextGenerationUtils.ts";
-import {
-  applyCursorAcpModelSelection,
-  makeCursorAcpRuntime,
-} from "../provider/acp/CursorAcpSupport.ts";
+import { applyCursorAcpModelSelection, makeCursorAcpRuntime } from "../spi/acpSupport.ts";
 
 const CURSOR_TIMEOUT_MS = 180_000;
 
