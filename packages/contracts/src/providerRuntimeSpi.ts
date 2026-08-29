@@ -27,6 +27,13 @@
  *   (`apps/server/src/spi/ProviderRuntimeEventBus.ts`). Owned code under
  *   `apps/server/src/zerops/**` reads `event.toolCall` only — it never reads
  *   `payload.data` again.
+ * - (no version bump, 2026-08-29, SPI-5): `apps/server/src/spi/driverHomes.ts`,
+ *   `driverLaunch.ts`, `acpSupport.ts`, `openCodeRuntime.ts`, and
+ *   `claudeProvider.ts` add small owned, typed capabilities (each with a
+ *   contract test) wrapping the driver-internal filesystem/home-dir,
+ *   launch-arg, ACP session, and model/effort surfaces `textGeneration/**`
+ *   and `usage/**` previously imported from `provider/**` directly. Additive
+ *   server-side wrapping only — `ProviderRuntimeEventV2` is unchanged.
  *
  * @module providerRuntimeSpi
  */
