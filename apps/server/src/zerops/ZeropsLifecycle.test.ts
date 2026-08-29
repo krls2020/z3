@@ -5,11 +5,12 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import type { ItemLifecyclePayload, ProviderRuntimeEvent, ThreadId } from "@t3tools/contracts";
+import type { ItemLifecyclePayload, SpiEvent, ThreadId } from "@t3tools/contracts";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ZeropsThreadLifecycle from "../persistence/ZeropsThreadLifecycle.ts";
 import { ProviderRuntimeEventBusTest } from "../spi/ProviderRuntimeEventBus.ts";
+import { applyToolCall } from "../spi/toolCall.ts";
 import { ZEROPS_ENVELOPE_FENCE } from "./zeropsEnvelope.ts";
 import * as ZeropsLifecycle from "./ZeropsLifecycle.ts";
 
@@ -38,17 +39,21 @@ const envelopeBlock = (phase: string) =>
 
 let eventCounter = 0;
 
-/** A Claude-shaped `item.completed` for one `zerops_*` tool. */
+/**
+ * An enriched (`.toolCall` already attached, via `applyToolCall` — the same
+ * enrichment the real bus applies) Claude `item.completed`/`item.started`
+ * for one `zerops_*` tool.
+ */
 const claudeEvent = (options: {
   readonly threadId?: ThreadId;
   readonly toolName?: string;
   readonly text?: string;
   readonly type?: "item.started" | "item.completed";
   readonly itemId?: string;
-}): ProviderRuntimeEvent =>
-  ({
+}): SpiEvent =>
+  applyToolCall({
     eventId: `evt-${(eventCounter += 1)}`,
-    provider: "claude",
+    provider: "claudeAgent",
     threadId: options.threadId ?? THREAD,
     createdAt: "2026-08-28T12:00:00Z",
     type: options.type ?? "item.completed",
@@ -71,7 +76,7 @@ const claudeEvent = (options: {
             }),
       },
     } satisfies ItemLifecyclePayload,
-  }) as ProviderRuntimeEvent;
+  } as SpiEvent);
 
 const persistence = ZeropsThreadLifecycle.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory));
 
@@ -88,7 +93,7 @@ const withLifecycle = <A, E>(
     Effect.gen(function* () {
       const repository = yield* ZeropsThreadLifecycle.ZeropsThreadLifecycleRepository;
       const lifecycle = yield* ZeropsLifecycle.make({
-        toolEvents: Stream.empty as Stream.Stream<ProviderRuntimeEvent>,
+        toolEvents: Stream.empty as Stream.Stream<SpiEvent>,
         repository,
       });
       return yield* use(lifecycle);
@@ -243,7 +248,7 @@ describe("ZeropsLifecycle", () => {
       Effect.gen(function* () {
         // The one test that goes through the real subscription rather than
         // `ingest`, so the stream wiring is covered too.
-        const bus = yield* Queue.unbounded<ProviderRuntimeEvent>();
+        const bus = yield* Queue.unbounded<SpiEvent>();
         const repository = yield* ZeropsThreadLifecycle.ZeropsThreadLifecycleRepository;
         const lifecycle = yield* ZeropsLifecycle.make({
           toolEvents: Stream.fromQueue(bus),
@@ -273,7 +278,7 @@ describe("ZeropsLifecycle", () => {
         yield* Effect.scoped(
           Effect.gen(function* () {
             const lifecycle = yield* ZeropsLifecycle.make({
-              toolEvents: Stream.empty as Stream.Stream<ProviderRuntimeEvent>,
+              toolEvents: Stream.empty as Stream.Stream<SpiEvent>,
               repository,
             });
             yield* lifecycle.ingest(claudeEvent({}));
@@ -283,7 +288,7 @@ describe("ZeropsLifecycle", () => {
         // A container restart keeps state.sqlite, so a returning client must
         // still see its strip without a fresh `status` call.
         const restarted = yield* ZeropsLifecycle.make({
-          toolEvents: Stream.empty as Stream.Stream<ProviderRuntimeEvent>,
+          toolEvents: Stream.empty as Stream.Stream<SpiEvent>,
           repository,
         });
         expect((yield* restarted.get(THREAD)).envelope?.phase).toBe("develop-active");
@@ -296,7 +301,7 @@ describe("ZeropsLifecycle.layer (wired to the owned ProviderRuntimeEventBus, not
   it.effect("ingests an event delivered over the bus", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const bus = yield* Queue.unbounded<ProviderRuntimeEvent>();
+        const bus = yield* Queue.unbounded<SpiEvent>();
         const layer = ZeropsLifecycle.layer.pipe(
           Layer.provide(ProviderRuntimeEventBusTest.make(Stream.fromQueue(bus))),
           Layer.provide(persistence),

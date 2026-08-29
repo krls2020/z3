@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import type { SpiEvent } from "@t3tools/contracts";
 
-import { applyToolCall, readToolCall } from "./toolCall.ts";
+import { applyToolCall, readToolCall, sniffToolCallShape } from "./toolCall.ts";
 
 let idCounter = 0;
 
@@ -340,5 +340,33 @@ describe("applyToolCall", () => {
     } as SpiEvent;
     const enriched = applyToolCall(event);
     expect(enriched.toolCall?.name).toBe("zerops_workflow");
+  });
+});
+
+/**
+ * `sniffToolCallShape` is the ONE compat exception to "know the provider
+ * first": `apps/server/src/orchestration/ActivityPayloadProjection.ts`
+ * projects a driver-agnostic `OrchestrationThreadActivity` that carries no
+ * `provider` field, only `payload.data` — so it cannot call `readToolCall`
+ * (which needs `event.provider`) at all.
+ */
+describe("sniffToolCallShape", () => {
+  it("recognizes a Claude shape without being told the provider", () => {
+    const result = sniffToolCallShape(
+      claudeToolCallData({ toolName: "mcp__zerops__zerops_deploy" }),
+    );
+    expect(result.kind).toBe("toolCall");
+    expect(result.kind === "toolCall" && result.call.name).toBe("zerops_deploy");
+  });
+
+  it("recognizes a Codex mcpToolCall shape without being told the provider", () => {
+    const result = sniffToolCallShape(codexToolCallData({ tool: "zerops_deploy" }));
+    expect(result.kind).toBe("toolCall");
+    expect(result.kind === "toolCall" && result.call.name).toBe("zerops_deploy");
+  });
+
+  it("returns notATool for a shape neither reader recognizes", () => {
+    const result = sniffToolCallShape({ command: "ls" });
+    expect(result.kind).toBe("notATool");
   });
 });

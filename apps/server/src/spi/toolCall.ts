@@ -234,3 +234,32 @@ export const applyToolCall = (event: SpiEvent): SpiEvent => {
   const result = readToolCall(event);
   return result.kind === "toolCall" ? { ...event, toolCall: result.call } : event;
 };
+
+/**
+ * Shape-sniffs `payload.data` across every known provider's tool-call shape
+ * (Claude's `{toolName, ...}` first, then Codex's `mcpToolCall` item),
+ * without requiring the caller to know which provider produced it, or which
+ * `itemType` the driver classified the item as.
+ *
+ * `apps/server/src/zerops/**` must still never call this — it reads
+ * `event.toolCall` instead, populated by the bus, which DOES know the
+ * provider. This exists for the one caller outside that boundary with no
+ * `SpiEvent` in hand:
+ * `apps/server/src/orchestration/ActivityPayloadProjection.ts` projects a
+ * driver-agnostic `OrchestrationThreadActivity` (no `provider` field,
+ * built upstream from an already-enriched event) — by the time it reaches
+ * that projection, only `payload.data` survives.
+ *
+ * Since the caller has no reliable `itemType` either, `unrecognized` here is
+ * never loud (there is nothing to log against) — this always resolves to
+ * `toolCall` or `notATool`.
+ */
+export const sniffToolCallShape = (data: unknown): ToolCallReadResult => {
+  const payload = { itemType: "unknown", data } as ItemLifecyclePayload;
+  const claude = readClaudeToolCall(payload);
+  if (claude.kind === "toolCall") {
+    return claude;
+  }
+  const codex = readCodexToolCall(payload);
+  return codex.kind === "toolCall" ? codex : { kind: "notATool" };
+};

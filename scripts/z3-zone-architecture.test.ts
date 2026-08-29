@@ -175,4 +175,39 @@ it.layer(NodeServices.layer)("z3 zone architecture", (it) => {
         assert.deepStrictEqual([...violations].sort(), KNOWN_OWNED_PRODUCT_PROVIDER_VIOLATIONS);
       }),
   );
+
+  it.effect(
+    "owned product (apps/server/src/zerops) never reads payload.data — the SPI's toolCall enrichment is the only reader (SPI-4)",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* repoRoot;
+
+        // A literal text scan, not an import check: the whole point of the
+        // SPI-4 boundary (`apps/server/src/spi/toolCall.ts`) is that
+        // `payload.data` — a driver's raw, per-provider item shape — is read
+        // in exactly ONE owned place. Every consumer under
+        // `apps/server/src/zerops/**` reads `event.toolCall` instead
+        // (`packages/contracts/src/providerRuntimeSpi.ts`). A hit here means
+        // a new call site started shape-dispatching on `payload.data` again.
+        const zeropsDir = path.join(root, "apps/server/src/zerops");
+        const files = yield* collectTsFiles(zeropsDir);
+        assert.isAbove(
+          files.length,
+          0,
+          "the owned-product scan found no files; did the zerops dir move?",
+        );
+
+        const violations: Array<string> = [];
+        for (const file of files) {
+          const source = yield* fs.readFileString(file);
+          if (source.includes("payload.data")) {
+            violations.push(path.relative(root, file));
+          }
+        }
+
+        assert.deepStrictEqual(violations, []);
+      }),
+  );
 });

@@ -35,7 +35,7 @@ import {
   ZEROPS_RECENT_TOOLS_LIMIT,
   ZeropsRecentTool,
   ZeropsStateEnvelope,
-  type ProviderRuntimeEvent,
+  type SpiEvent,
   type ThreadId,
   type ZeropsLifecycle as ZeropsLifecycleState,
 } from "@t3tools/contracts";
@@ -66,7 +66,7 @@ export class ZeropsLifecycle extends Context.Service<
      * thin adapter over this, so a caller (or a test) can drive the reducer
      * directly and know when it has settled.
      */
-    readonly ingest: (event: ProviderRuntimeEvent) => Effect.Effect<void>;
+    readonly ingest: (event: SpiEvent) => Effect.Effect<void>;
   }
 >()("t3/zerops/ZeropsLifecycle") {}
 
@@ -101,7 +101,7 @@ const withRecentTool = (
 };
 
 export interface ZeropsLifecycleOptions {
-  readonly toolEvents: Stream.Stream<ProviderRuntimeEvent>;
+  readonly toolEvents: Stream.Stream<SpiEvent>;
   readonly repository: ZeropsThreadLifecycleRepository["Service"];
 }
 
@@ -174,23 +174,23 @@ export const make = (options: ZeropsLifecycleOptions) =>
           ),
         );
 
-    const ingest = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
+    const ingest = (event: SpiEvent): Effect.Effect<void> =>
       writeMutex.withPermits(1)(
         Effect.gen(function* () {
           if (event.type !== "item.started" && event.type !== "item.completed") {
             return;
           }
-          const call = readZeropsToolCall(event.payload);
+          const call = readZeropsToolCall(event);
           if (call === undefined) {
             return;
           }
 
           const previous = yield* load(event.threadId);
           const at = yield* DateTime.now;
+          const resultText = call.result?.text;
+          const failed = call.result?.failed === true;
           const envelope =
-            call.resultText === undefined || call.failed
-              ? undefined
-              : extractZeropsEnvelope(call.resultText);
+            resultText === undefined || failed ? undefined : extractZeropsEnvelope(resultText);
 
           const next: ZeropsLifecycleState = {
             threadId: event.threadId,
@@ -203,9 +203,9 @@ export const make = (options: ZeropsLifecycleOptions) =>
                 : { envelope: previous.envelope }
               : { envelope }),
             recentTools: withRecentTool(previous.recentTools, {
-              toolName: call.toolName,
+              toolName: call.name,
               status:
-                event.type === "item.started" ? "inProgress" : call.failed ? "failed" : "completed",
+                event.type === "item.started" ? "inProgress" : failed ? "failed" : "completed",
               at,
               ...(event.itemId === undefined ? {} : { itemId: event.itemId }),
             }),
