@@ -134,7 +134,7 @@ export const resolveGitRevision = Effect.fn("resolveGitRevision")(function* (
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const context = { cwd, revision } as const;
   const child = yield* spawner
-    .spawn(ChildProcess.make("git", ["rev-parse", revision], { cwd }))
+    .spawn(ChildProcess.make("git", ["rev-parse", "--verify", revision], { cwd }))
     .pipe(
       Effect.mapError(
         (cause) => new GitRevisionResolutionError({ ...context, operation: "spawn", cause }),
@@ -264,7 +264,11 @@ export const writeImportedLock = Effect.fn("writeImportedLock")(function* (
   upstreamRef: string,
   paths: ReadonlyArray<string> = IMPORTED_LOCK_PATHS,
 ) {
-  const upstreamSha = yield* resolveGitRevision(cwd, upstreamRef);
+  // `^{commit}` peels an annotated tag's ref (which points at the tag OBJECT,
+  // not the commit) to the commit it names — a no-op when upstreamRef is
+  // already a commit or a lightweight tag. `imported.lock`'s `upstream` field
+  // must be the commit so a later `git diff <upstream>..upstream/main` works.
+  const upstreamSha = yield* resolveGitRevision(cwd, `${upstreamRef}^{commit}`);
   const upstreamOids = yield* resolveTreeOids(cwd, upstreamRef, paths);
   const headOids = yield* resolveTreeOids(cwd, "HEAD", paths);
   const mismatches = diffOidMaps(upstreamOids, headOids);

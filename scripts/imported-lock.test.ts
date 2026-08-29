@@ -311,6 +311,36 @@ it.layer(NodeServices.layer)("imported-lock: writeImportedLock", (it) => {
     ),
   );
 
+  it.effect("records the commit an annotated tag points at, not the tag object itself", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* makeFixtureRepo({ "pkg-a/index.ts": "export const a = 1;\n" });
+        yield* runGit(fixture.repoDir, [
+          "-c",
+          "user.name=imported-lock-test",
+          "-c",
+          "user.email=imported-lock-test@example.invalid",
+          "tag",
+          "-a",
+          "upstream-fixture",
+          "-m",
+          "annotated fixture tag",
+        ]);
+        const tagObjectSha = yield* resolveGitRevision(fixture.repoDir, "upstream-fixture");
+        const commitSha = yield* resolveGitRevision(fixture.repoDir, "HEAD");
+        // Sanity: an annotated tag's ref points at a tag object, not the commit
+        // directly — if these were equal (a lightweight tag), the assertion
+        // below would pass whether or not writeImportedLock peels to the
+        // commit, and the fix this test exists for would go unproven.
+        assert.notEqual(tagObjectSha, commitSha);
+
+        const lock = yield* writeImportedLock(fixture.repoDir, "upstream-fixture", ["pkg-a"]);
+
+        assert.equal(lock.upstream, commitSha);
+      }),
+    ),
+  );
+
   it.effect("rejects a HEAD that has drifted from the upstream ref", () =>
     Effect.scoped(
       Effect.gen(function* () {
