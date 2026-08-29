@@ -493,13 +493,18 @@ export const make = (options: ZeropsAgentAuthOptions) =>
           ...current,
           credPresence: { ...current.credPresence, [agentId]: now },
         }));
-        // Every event where the file exists requests a check — not just the
-        // absent->present transition: Claude stages the credential then
-        // atomically renames it, and a stale credential can be REPLACED by a
-        // fresh one without ever going through "absent" in between.
-        if (now) {
-          yield* requestProviderCheck(agentId, { fromCredential: true });
-        }
+        // Every credential event requests its own targeted check — in
+        // EITHER direction, not just absent->present: Claude stages the
+        // credential then atomically renames it, so a stale credential can
+        // be REPLACED by a fresh one without ever going through "absent" in
+        // between; and a present->absent transition (a logout / GUI revoke)
+        // needs its own check too (S7 fix2 F1) — without one, `providerAuth`
+        // never flips to "unauthenticated" for the file-absent window, since
+        // only `credPresent` itself would change. The verified check is
+        // still what actually gates `mark-oauth` (see checkProviderAuth): a
+        // check that reads back unauthenticated can never spawn it, removal
+        // included.
+        yield* requestProviderCheck(agentId, { fromCredential: true });
         yield* publish;
       });
 
