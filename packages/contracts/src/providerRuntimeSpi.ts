@@ -7,28 +7,83 @@
  * This module re-exports the event union rather than moving or renaming it:
  * `./providerRuntime.ts` stays upstream's file, edited on every port; this
  * file is the one owned place that names a version for what that union
- * currently guarantees.
+ * currently guarantees, plus the owned enrichment `apps/server/src/spi/`
+ * adds on top of it.
  *
  * SPI changelog:
  * - 2.0 (2026-08-29, SPI-1): declared. Surface = `ProviderRuntimeEventV2`
  *   (49 `type`-discriminated members) + the `streamEvents` port. No typed
  *   `toolCall` view yet (SPI-4); no versioned adapter gate reads this
  *   constant yet — it exists so a later slice has one to check against.
+ * - 2.1 (2026-08-29, SPI-4): every `SpiEvent` the bus emits now carries an
+ *   optional `toolCall: SpiToolCall`, populated on `item.started` /
+ *   `item.updated` / `item.completed` when the driver's `payload.data`
+ *   shape is recognized (`apps/server/src/spi/toolCall.ts`) — ANY tool, not
+ *   only a `zerops_*` one. A tool-lifecycle item
+ *   (`isToolLifecycleItemType(payload.itemType)`) whose shape is NOT
+ *   recognized never resolves to a silent `undefined`: the bus also exposes
+ *   `enrichmentFailures: Stream<SpiEnrichmentFailure>` and logs a warning,
+ *   once per (provider, itemType, reason) signature
+ *   (`apps/server/src/spi/ProviderRuntimeEventBus.ts`). Owned code under
+ *   `apps/server/src/zerops/**` reads `event.toolCall` only — it never reads
+ *   `payload.data` again.
  *
  * @module providerRuntimeSpi
  */
-import type { ProviderRuntimeEvent } from "./providerRuntime.ts";
+import type { EventId } from "./baseSchemas.ts";
+import type { ProviderDriverKind } from "./providerInstance.ts";
+import type { CanonicalItemType, ProviderRuntimeEvent } from "./providerRuntime.ts";
 
 /**
  * The current SPI version. Bump this — and add a changelog entry above —
- * whenever a change to `ProviderRuntimeEventV2` changes what owned code may
- * depend on (a new member, a renamed field, a narrowed payload shape).
+ * whenever a change to `ProviderRuntimeEventV2` (or the owned `toolCall`
+ * enrichment) changes what owned code may depend on (a new member, a
+ * renamed field, a narrowed payload shape).
  */
-export const PROVIDER_RUNTIME_SPI_VERSION = "2.0";
+export const PROVIDER_RUNTIME_SPI_VERSION = "2.1";
 
 /**
- * The event type owned code depends on. An alias today; SPI-4 widens it with
- * an owned `toolCall` enrichment field without touching the driver-emitted
- * union underneath.
+ * The generic view of one tool call an item lifecycle payload's
+ * driver-specific `data` describes — ANY tool, not only a `zerops_*` one.
+ *
+ * `name` has the `mcp__<server>__` prefix stripped when the driver reports
+ * one that way (Claude embeds it in the wire name); `server` is that
+ * prefix's middle segment, or the driver's separate server field (Codex),
+ * when the call went through MCP — absent for a driver-native tool (Claude's
+ * Bash, a subagent Task, ...). `result` is present once the call has
+ * returned; absent on `item.started` and on an `item.updated` still in
+ * flight.
  */
-export type SpiEvent = ProviderRuntimeEvent;
+export interface SpiToolCall {
+  readonly name: string;
+  readonly rawName: string;
+  readonly server?: string;
+  readonly arguments?: unknown;
+  readonly result?: {
+    readonly text: string;
+    readonly failed: boolean;
+  };
+}
+
+/**
+ * The event type owned code depends on. `toolCall` is owned enrichment
+ * (`apps/server/src/spi/toolCall.ts`) layered on top of what the driver
+ * itself emits — populated by the bus, never decoded from `payload.data` by
+ * anything outside that one file.
+ */
+export type SpiEvent = ProviderRuntimeEvent & { readonly toolCall?: SpiToolCall };
+
+/**
+ * Reported on the bus's `enrichmentFailures` side channel (and logged, once
+ * per (provider, itemType, reason) signature) when an item the driver marked
+ * as a tool (`isToolLifecycleItemType(payload.itemType)`) carries a `data`
+ * shape `apps/server/src/spi/toolCall.ts` does not recognize — the signal
+ * that a ported driver changed a tool-call shape and stopped reaching
+ * `event.toolCall`, instead of that happening silently.
+ */
+export interface SpiEnrichmentFailure {
+  readonly eventId: EventId;
+  readonly provider: ProviderDriverKind;
+  readonly itemType: CanonicalItemType;
+  readonly reason: string;
+}
