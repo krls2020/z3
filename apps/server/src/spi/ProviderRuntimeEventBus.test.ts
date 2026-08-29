@@ -37,10 +37,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+
+import { PROVIDER_RUNTIME_SPI_VERSION, type SpiEvent } from "@t3tools/contracts";
+
+import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ProviderRuntimeEventBus, ProviderRuntimeEventBusLive } from "./ProviderRuntimeEventBus.ts";
 
 interface FakeEvent {
   readonly id: number;
@@ -111,12 +117,11 @@ describe("ProviderService's runtime-event fan-out (today's semantics, measured d
           // Subscriber A: subscribes and drains continuously, never falling behind.
           const subscriptionA = yield* PubSub.subscribe(runtimeEventPubSub);
           const receivedByA = yield* Ref.make<ReadonlyArray<FakeEvent>>([]);
-          const consumerA = yield* PubSub.take(subscriptionA)
-            .pipe(
-              Effect.tap((event) => Ref.update(receivedByA, (current) => [...current, event])),
-              Effect.forever,
-            )
-            .pipe(Effect.forkChild);
+          const consumerA = yield* PubSub.take(subscriptionA).pipe(
+            Effect.tap((event) => Ref.update(receivedByA, (current) => [...current, event])),
+            Effect.forever,
+            Effect.forkChild,
+          );
 
           // Subscriber B: subscribes too (so it is not the no-replay case
           // above) but never takes anything — it has fallen behind.
@@ -149,5 +154,71 @@ describe("ProviderService's runtime-event fan-out (today's semantics, measured d
           expect(drained).toEqual(events);
         }),
       ),
+  );
+});
+
+describe("ProviderRuntimeEventBus (the owned wrapper)", () => {
+  it.effect("forwards ProviderService.streamEvents as its own events stream, unaltered", () =>
+    Effect.gen(function* () {
+      const providerLayer = Layer.mock(ProviderService)({
+        streamEvents: Stream.make(
+          { id: "evt-1" } as unknown as SpiEvent,
+          { id: "evt-2" } as unknown as SpiEvent,
+        ),
+      });
+
+      const received = yield* Effect.gen(function* () {
+        const bus = yield* ProviderRuntimeEventBus;
+        return yield* Stream.runCollect(bus.events);
+      }).pipe(Effect.provide(ProviderRuntimeEventBusLive.pipe(Layer.provide(providerLayer))));
+
+      expect(Array.from(received)).toEqual([{ id: "evt-1" }, { id: "evt-2" }]);
+    }),
+  );
+
+  it.effect("exposes the SPI version it was built against", () =>
+    Effect.gen(function* () {
+      const providerLayer = Layer.mock(ProviderService)({ streamEvents: Stream.empty });
+
+      const version = yield* Effect.gen(function* () {
+        const bus = yield* ProviderRuntimeEventBus;
+        return bus.version;
+      }).pipe(Effect.provide(ProviderRuntimeEventBusLive.pipe(Layer.provide(providerLayer))));
+
+      expect(version).toBe(PROVIDER_RUNTIME_SPI_VERSION);
+    }),
+  );
+
+  it.effect(
+    "adds no buffering of its own — a subscriber that starts late still misses only what a late ProviderService subscriber would miss",
+    () =>
+      Effect.gen(function* () {
+        const runtimeEventPubSub = yield* PubSub.unbounded<SpiEvent>();
+        const providerLayer = Layer.mock(ProviderService)({
+          get streamEvents() {
+            return Stream.fromPubSub(runtimeEventPubSub);
+          },
+        });
+
+        yield* PubSub.publish(runtimeEventPubSub, { id: "evt-early" } as unknown as SpiEvent);
+
+        const receivedRef = yield* Ref.make<ReadonlyArray<SpiEvent>>([]);
+        const consumer = yield* Effect.gen(function* () {
+          const bus = yield* ProviderRuntimeEventBus;
+          return yield* Stream.runForEach(bus.events, (event) =>
+            Ref.update(receivedRef, (current) => [...current, event]),
+          );
+        }).pipe(
+          Effect.provide(ProviderRuntimeEventBusLive.pipe(Layer.provide(providerLayer))),
+          Effect.forkChild,
+        );
+        yield* advanceTestClock(50);
+
+        yield* PubSub.publish(runtimeEventPubSub, { id: "evt-late" } as unknown as SpiEvent);
+        yield* advanceTestClock(50);
+
+        yield* Fiber.interrupt(consumer);
+        expect(yield* Ref.get(receivedRef)).toEqual([{ id: "evt-late" }]);
+      }),
   );
 });
