@@ -31,8 +31,8 @@ Measured against the real upstream repo, 2026-08-28:
   tagged `upstream-base-2026-08-28`. The fork's `main` branch is that commit's history renamed —
   it was branch `z3` before the freeze.
 - From here on: no `git merge upstream/*`, no `git rebase upstream/main`.
-- Versioning is ours: `z3 v0.1.0` (in progress, §8 item 7). The npm name `t3` survives on the
-  container prefix until the release gate picks the bundle channel.
+- Versioning is ours: `z3 v0.1.0` (§8 item 7). The npm name `t3` survives on the container prefix
+  until the release gate picks the bundle channel.
 
 ## 3. Zones — the map, machine-checked
 
@@ -53,23 +53,16 @@ enforcement. No history inspection, nothing rots on a squash or rename.
 
 Alongside it, a zcp-style architecture test: ported code carries no `zerops` imports; owned
 product code reaches providers only through the SPI (§3.2) — today's direct `ProviderService`
-imports in the lifecycle/topology feeds are the first violation the test flags.
+imports in the lifecycle/topology feeds were the first violations; the list is empty since SPI-1 (2026-08-29).
 
 ### 3.2 The adapter SPI — the contract that makes porting safe
 
 Provider runtime events, persistence, orchestration, contracts and our Zerops reducers share
 source-level types today; a port that drops or reclassifies a lifecycle event compiles fine and
-breaks at runtime. Before any path is declared imported or ported, three things exist:
-
-- a **versioned normalized event schema** between drivers and everything else (orchestration, the
-  lifecycle reducer, persistence) — one file, semver'd, with a changelog;
-- **recorded fixtures**: real `claude -p --output-format stream-json` and `codex exec --json`
-  streams for the turns we depend on (tool call + result with envelope, user-input request,
-  compaction, error, sub-agent), replayed in tests against the SPI; a port that changes the
-  normalized output of a fixture fails the test, not the user;
-- a **compatibility matrix** row per port: ported upstream SHA × Claude CLI version × Codex CLI
-  version × Effect version, recorded in the ledger — the answer to "does this fork work with
-  today's CLIs".
+breaks at runtime. The full contract — event surface and version policy, the delivery guarantee,
+tool-call enrichment, the typed capability wrappers, fixture format and recording, and the porting
+checklist — is declared in `spi.md`, not here. Per-port compatibility rows (ported upstream SHA ×
+Claude CLI × Codex CLI × Effect version × fixture set) live in `compat.md`.
 
 ## 4. What goes, what stays
 
@@ -127,12 +120,12 @@ to be more than a mechanical cherry-pick.
 
 ## 8. Freeze checklist
 
-| #   | Item                                                                                                                                      | Status                                                                                                            |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| 1   | Tag `upstream-base-2026-08-28`; rename `z3` → `main`; ledger row                                                                          | done                                                                                                              |
-| 2   | Adapter SPI + fixtures (§3.2) — the largest item; recorded from `z3-eval` with the real CLIs; the lifecycle/topology feeds move behind it | in progress — four Claude recordings landed 2026-08-29; bus + harness + enrichment + capabilities + `spi.md` open |
-| 3   | `imported.lock` + CI (lock check, changed-package tests, typecheck, architecture test)                                                    | done 2026-08-29                                                                                                   |
-| 4   | Deletions from §4 marked delete — one slice each (Tailscale is a refactor slice, not a `rm`)                                              | Tailscale done 2026-08-29; `apps/marketing` in progress; local spawn → S5-1; cloud reach → S5-5                   |
-| 5   | Mirrored model manifest                                                                                                                   | done 2026-08-29                                                                                                   |
-| 6   | Fork `CLAUDE.md` (the map) + this document + `intake.md` row 0                                                                            | done 2026-08-29                                                                                                   |
-| 7   | Versioning `z3 v0.1.0`; retire brief §4 rule 6; write `../zcp/docs/spec-z3.md` §7                                                         | 0.1.0 done 2026-08-29; spec-z3 §7 + brief rule 6 open (land with the SPI)                                         |
+| #   | Item                                                                                                                                      | Status                                                                                                                                                                                                 |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | Tag `upstream-base-2026-08-28`; rename `z3` → `main`; ledger row                                                                          | done                                                                                                                                                                                                   |
+| 2   | Adapter SPI + fixtures (§3.2) — the largest item; recorded from `z3-eval` with the real CLIs; the lifecycle/topology feeds move behind it | done 2026-08-29 (live sanity on `z3-eval` pending)                                                                                                                                                     |
+| 3   | `imported.lock` + CI (lock check, changed-package tests, typecheck, architecture test)                                                    | done 2026-08-29                                                                                                                                                                                        |
+| 4   | Deletions from §4 marked delete — one slice each (Tailscale is a refactor slice, not a `rm`)                                              | Tailscale + `apps/marketing` done 2026-08-29; T3 Connect reach removed from the relay + client-runtime/web/mobile 2026-08-29 (server-side CLI token manager / boot service → S5-5); local spawn → S5-1 |
+| 5   | Mirrored model manifest                                                                                                                   | done 2026-08-29                                                                                                                                                                                        |
+| 6   | Fork `CLAUDE.md` (the map) + this document + `intake.md` row 0                                                                            | done 2026-08-29                                                                                                                                                                                        |
+| 7   | Versioning `z3 v0.1.0`; retire brief §4 rule 6; write `../zcp/docs/spec-z3.md` §7                                                         | 0.1.0 done; `spec-z3.md` §7 written 2026-08-29; brief rule 6 retired                                                                                                                                   |

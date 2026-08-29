@@ -11,15 +11,17 @@ the reference the plan cites; they hold no plan of their own.
 
 ## The seven files
 
-| File                                 | Holds                                                                                    | Lifecycle                                                                    |
-| ------------------------------------ | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [`map.md`](map.md)                   | The systems and every channel between them                                               | Changes when a channel is added or removed                                   |
-| [`verified.md`](verified.md)         | Facts measured against real systems                                                      | Each entry decays; re-verify before trusting                                 |
-| [`hacks.md`](hacks.md)               | Shortcuts (POC and dev-loop) and what the real fix is                                    | Entries die when paid back                                                   |
-| [`questions.md`](questions.md)       | Unknowns that block real implementation                                                  | Entries die when answered — move the answer to `verified.md`                 |
-| [`poc-findings.md`](poc-findings.md) | What the POC taught: the T3 seam map + functional facts, and where its code sits         | Frozen with the tag; a seam that moves upstream gets a note                  |
-| [`fork.md`](fork.md)                 | The fork rules: hard-fork decision, freeze, zones, keep/delete, work loop, intake ritual | Changes when a rule changes; the freeze checklist status moves as items land |
-| [`intake.md`](intake.md)             | Last-reviewed upstream SHA, the decisions taken, open security candidates                | One row per intake cycle                                                     |
+| File                                 | Holds                                                                                                                                                        | Lifecycle                                                                       |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| [`map.md`](map.md)                   | The systems and every channel between them                                                                                                                   | Changes when a channel is added or removed                                      |
+| [`verified.md`](verified.md)         | Facts measured against real systems                                                                                                                          | Each entry decays; re-verify before trusting                                    |
+| [`hacks.md`](hacks.md)               | Shortcuts (POC and dev-loop) and what the real fix is                                                                                                        | Entries die when paid back                                                      |
+| [`questions.md`](questions.md)       | Unknowns that block real implementation                                                                                                                      | Entries die when answered — move the answer to `verified.md`                    |
+| [`poc-findings.md`](poc-findings.md) | What the POC taught: the T3 seam map + functional facts, and where its code sits                                                                             | Frozen with the tag; a seam that moves upstream gets a note                     |
+| [`fork.md`](fork.md)                 | The fork rules: hard-fork decision, freeze, zones, keep/delete, work loop, intake ritual                                                                     | Changes when a rule changes; the freeze checklist status moves as items land    |
+| [`intake.md`](intake.md)             | Last-reviewed upstream SHA, the decisions taken, open security candidates                                                                                    | One row per intake cycle                                                        |
+| [`spi.md`](spi.md)                   | The provider runtime SPI contract: boundary, version/changelog, event kinds, delivery guarantee, enrichment, typed capabilities, fixtures, porting checklist | Changes when the SPI version bumps or a capability/fixture/porting step changes |
+| [`compat.md`](compat.md)             | Per-port compatibility matrix: ported upstream SHA × CLI/SDK/Effect versions × fixture set                                                                   | One row per port, never edited in place                                         |
 
 ## Rules for adding to this
 

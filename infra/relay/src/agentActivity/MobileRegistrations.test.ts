@@ -46,7 +46,6 @@ function makeDevices(
   return {
     register: () => Effect.void,
     unregister: () => Effect.void,
-    listForUser: () => Effect.succeed([]),
     ...overrides,
   };
 }
@@ -106,9 +105,6 @@ function makeEnvironmentLinks(
         },
       ]),
     listPublicKeysForEnvironment: () => Effect.succeed([]),
-    listForUser: () => Effect.succeed([]),
-    getForUser: () => Effect.succeed(null),
-    revokeForUser: () => Effect.succeed(false),
     ...overrides,
   };
 }
@@ -133,14 +129,10 @@ const config = RelayConfiguration.RelayConfiguration.of({
     bundleId: "codes.t3.mobile",
     privateKey: Redacted.make("apns-private-key"),
   },
-  clerkSecretKey: Redacted.make("clerk-secret"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  zeropsApiHost: "",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-job-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 });
 
 function makeRegistrationReplayLayer(input: {

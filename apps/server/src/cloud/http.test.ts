@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -14,8 +15,9 @@ import {
   type HttpClientRequest,
 } from "effect/unstable/http";
 
-import { EnvironmentId } from "@t3tools/contracts";
+import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
 import { RelayClientTracer } from "@t3tools/shared/relayTracing";
+import { decodeRelayJwt } from "@t3tools/shared/relayJwt";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfigModule from "../config.ts";
@@ -35,9 +37,11 @@ import {
   consumeCloudReplayGuards,
   isSupportedLinkProviderKind,
   linkProofScopes,
+  makeCloudLinkProof,
   pendingServiceUpdateExists,
   reconcileDesiredCloudLink,
   releaseManagedTunnelOnShutdown,
+  resolveZeropsLinkProofOrigin,
 } from "./http.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import { traceAuthenticatedRelayRequest, traceRelayRequest } from "./traceRelayRequest.ts";
@@ -229,7 +233,11 @@ describe("reconcileDesiredCloudLink", () => {
         HttpClient.HttpClient,
         HttpClient.make(() => unusedSecretStoreOperation()),
       ),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ServerConfigModule.layerTest("/", { prefix: "t3-http-reconcile-test-" }).pipe(
+          Layer.provideMerge(NodeServices.layer),
+        ),
+      ),
     ),
   );
 });
@@ -601,11 +609,170 @@ describe("link proof provider kinds", () => {
     expect(isSupportedLinkProviderKind(proofRequest("t3_relay"))).toBe(false);
   });
 
-  it("only claims the managed-tunnel scope for tunnel links", () => {
-    expect(linkProofScopes(proofRequest("cloudflare_tunnel"))).toEqual([
-      "agent_activity_notifications",
-      "managed_tunnels",
-    ]);
-    expect(linkProofScopes(proofRequest("manual"))).toEqual(["agent_activity_notifications"]);
+  it("always claims only the agent-activity-notifications scope", () => {
+    // The relay stopped provisioning managed tunnels, so the proof no longer
+    // claims a scope that varies by endpoint provider kind.
+    expect(linkProofScopes()).toEqual(["agent_activity_notifications"]);
   });
+});
+
+describe("resolveZeropsLinkProofOrigin", () => {
+  it.effect("prefers the configured public origin over the request origin", () =>
+    Effect.gen(function* () {
+      const origin = yield* resolveZeropsLinkProofOrigin({
+        publicOrigin: "https://zcp-26a7-8080.prg1.zerops.app",
+        requestOrigin: "https://attacker.example.test",
+      });
+      expect(origin).toBe("https://zcp-26a7-8080.prg1.zerops.app");
+    }),
+  );
+
+  it.effect("falls back to the request origin when no override is configured", () =>
+    Effect.gen(function* () {
+      const origin = yield* resolveZeropsLinkProofOrigin({
+        publicOrigin: undefined,
+        requestOrigin: "https://zcp-26a7-8080.prg1.zerops.app",
+      });
+      expect(origin).toBe("https://zcp-26a7-8080.prg1.zerops.app");
+    }),
+  );
+
+  it.effect("refuses when neither source is configured", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        resolveZeropsLinkProofOrigin({ publicOrigin: undefined, requestOrigin: undefined }),
+      );
+      expect(error._tag).toBe("EnvironmentHttpBadRequestError");
+    }),
+  );
+
+  it.effect("refuses a loopback origin", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        resolveZeropsLinkProofOrigin({
+          publicOrigin: undefined,
+          requestOrigin: "https://127.0.0.1:8080",
+        }),
+      );
+      expect(error._tag).toBe("EnvironmentHttpBadRequestError");
+    }),
+  );
+
+  it.effect("refuses a non-https origin", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        resolveZeropsLinkProofOrigin({
+          publicOrigin: undefined,
+          requestOrigin: "http://zcp-26a7-8080.prg1.zerops.app",
+        }),
+      );
+      expect(error._tag).toBe("EnvironmentHttpBadRequestError");
+    }),
+  );
+
+  it.effect("refuses an unparsable origin", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        resolveZeropsLinkProofOrigin({ publicOrigin: undefined, requestOrigin: "not a url" }),
+      );
+      expect(error._tag).toBe("EnvironmentHttpBadRequestError");
+    }),
+  );
+});
+
+describe("makeCloudLinkProof — Zerops project binding", () => {
+  const environmentId = EnvironmentId.make("env_zerops_test");
+  const descriptor = {
+    environmentId,
+    label: "Test Zerops Environment",
+    platform: { os: "linux", arch: "x64" },
+    serverVersion: "0.0.0-test",
+    capabilities: { repositoryIdentity: true },
+  } satisfies ExecutionEnvironmentDescriptor;
+
+  const proofRequest = {
+    challenge: "challenge",
+    relayIssuer: "https://relay.example.test",
+    endpoint: {
+      httpBaseUrl: "http://127.0.0.1:7331",
+      wsBaseUrl: "ws://127.0.0.1:7331",
+      providerKind: "manual",
+    },
+    origin: { localHttpHost: "127.0.0.1", localHttpPort: 7331 },
+  } satisfies RelayLinkProofRequest;
+
+  function makeKeyPairSecretStore(): ServerSecretStore.ServerSecretStore["Service"] {
+    const values = new Map<string, Uint8Array>();
+    return {
+      get: (name) => Effect.sync(() => Option.fromNullishOr(values.get(name))),
+      set: (name, value) =>
+        Effect.sync(() => {
+          values.set(name, value);
+        }),
+      create: (name, value) =>
+        values.has(name)
+          ? Effect.fail(storeFailure("AlreadyExists"))
+          : Effect.sync(() => {
+              values.set(name, value);
+            }),
+      getOrCreateRandom: unusedSecretStoreOperation,
+      remove: (name) =>
+        Effect.sync(() => {
+          values.delete(name);
+        }),
+    };
+  }
+
+  const dependenciesWith = (zerops: ServerConfigModule.ServerConfig["Service"]["zerops"]) =>
+    ({
+      secrets: makeKeyPairSecretStore(),
+      environment: ServerEnvironment.ServerEnvironment.of({
+        getEnvironmentId: Effect.succeed(environmentId),
+        getDescriptor: Effect.succeed(descriptor),
+      }),
+      config: { zerops } as ServerConfigModule.ServerConfig["Service"],
+      endpointRuntime: {} as ManagedEndpointRuntime.CloudManagedEndpointRuntime["Service"],
+      environmentAuth: {} as EnvironmentAuth.EnvironmentAuth["Service"],
+      cliTokenManager: {} as CliTokenManager.CloudCliTokenManager["Service"],
+      httpClient: HttpClient.make(() => unusedSecretStoreOperation()),
+    }) as unknown as Parameters<typeof makeCloudLinkProof>[0];
+
+  it.effect("refuses to issue a proof outside Zerops mode", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        makeCloudLinkProof(
+          dependenciesWith(undefined),
+          proofRequest,
+          "http://127.0.0.1:7331",
+          "https://unused.example.test",
+        ),
+      );
+      expect(error._tag).toBe("EnvironmentHttpBadRequestError");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("stamps the Zerops project id and endpoint origin into the signed proof", () =>
+    Effect.gen(function* () {
+      const proof = yield* makeCloudLinkProof(
+        dependenciesWith({
+          projectId: "nTV3oMB2SS634ImDJnQckg",
+          apiBaseUrl: "https://api.app-prg1.zerops.io/api/rest/public",
+          allowedOrigins: [],
+          membershipTtl: Duration.seconds(900),
+          publicOrigin: undefined,
+        }),
+        proofRequest,
+        "http://127.0.0.1:7331",
+        "https://zcp-26a7-8080.prg1.zerops.app",
+      );
+      const decoded = decodeRelayJwt(proof) as unknown as {
+        readonly zeropsProjectId: string;
+        readonly endpointOrigin: string;
+        readonly scopes: ReadonlyArray<string>;
+      };
+      expect(decoded.zeropsProjectId).toBe("nTV3oMB2SS634ImDJnQckg");
+      expect(decoded.endpointOrigin).toBe("https://zcp-26a7-8080.prg1.zerops.app");
+      expect(decoded.scopes).toEqual(["agent_activity_notifications"]);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });

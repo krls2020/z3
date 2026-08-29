@@ -5,12 +5,20 @@
  * Reads both feeds and renders. Nothing here mutates the project — the agent
  * owns every change, through MCP.
  */
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { zeropsAgentAuthNeedsAttention } from "../../zerops/agentLogin";
 import { zeropsQuickActions } from "../../zerops/quickActions";
 import { buildZeropsServiceMap } from "../../zerops/serviceMap";
-import { useZeropsLifecycle, useZeropsTopology } from "../../zerops/useZeropsFeeds";
+import { useAgentLogin } from "../../zerops/useAgentLogin";
+import {
+  useZeropsAgentAuth,
+  useZeropsLifecycle,
+  useZeropsTopology,
+} from "../../zerops/useZeropsFeeds";
+import { ZeropsAgentAuthCard } from "./ZeropsAgentAuthCard";
 import { ZeropsQuickActions } from "./ZeropsQuickActions";
 import { ZeropsServiceMap } from "./ZeropsServiceMap";
 
@@ -23,6 +31,10 @@ export function ZeropsPanel({
 }) {
   const topology = useZeropsTopology(environmentId);
   const lifecycle = useZeropsLifecycle(environmentId, threadId);
+  const agentAuth = useZeropsAgentAuth(environmentId);
+  const threadRef =
+    environmentId !== null && threadId !== null ? scopeThreadRef(environmentId, threadId) : null;
+  const signInToAgent = useAgentLogin(threadRef);
   const view = buildZeropsServiceMap(topology, lifecycle);
 
   return (
@@ -33,6 +45,9 @@ export function ZeropsPanel({
         ) : (
           <div className="space-y-4">
             <ZeropsServiceMap view={view} />
+            {agentAuth !== undefined && zeropsAgentAuthNeedsAttention(agentAuth) ? (
+              <ZeropsAgentAuthCard onSignIn={signInToAgent} snapshot={agentAuth} />
+            ) : null}
             <ZeropsQuickActions actions={zeropsQuickActions(topology)} />
           </div>
         )}

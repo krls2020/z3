@@ -41,13 +41,9 @@ const config = RelayConfiguration.RelayConfiguration.of({
     bundleId: "com.t3tools.t3code.dev",
   },
   apnsDeliveryJobSigningSecret: Redacted.make("job-signing-secret"),
-  clerkSecretKey: Redacted.make("clerk-secret"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  zeropsApiHost: "",
   cloudMintPrivateKey: Redacted.make("cloud-private-key"),
   cloudMintPublicKey: "cloud-public-key",
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 });
 
 const apnsSigningKeyPair = NodeCrypto.generateKeyPairSync("ec", {

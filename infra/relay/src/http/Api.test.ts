@@ -1,6 +1,4 @@
-import { createClerkClient, verifyToken } from "@clerk/backend";
 import { describe, expect, it } from "@effect/vitest";
-import { vi } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -14,31 +12,25 @@ import * as Tracer from "effect/Tracer";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServerRequest from "effect/unstable/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
-import { EnvironmentId } from "@t3tools/contracts";
-import { RelayEnvironmentAuth } from "@t3tools/contracts/relay";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import {
+  RelayClientAuth,
+  RelayClientPrincipal,
+  RelayEnvironmentAuth,
+} from "@t3tools/contracts/relay";
 
 import {
   RELAY_REQUEST_DEADLINE_MS,
+  relayClientAuthLayer,
   relayCors,
   relayDocsRedirectRoute,
   relayEnvironmentAuthLayer,
   relayNotFoundRoute,
-  revokeEnvironmentLinkRecord,
   traceRelayHttpRequestWith,
-  unlinkEnvironmentRecord,
-  verifyRelayClientBearerToken,
   withoutCapturedParentSpan,
 } from "./Api.ts";
 import * as RelayConfiguration from "../Config.ts";
-import * as RelayDb from "../db.ts";
 import * as EnvironmentCredentials from "../environments/EnvironmentCredentials.ts";
-import * as EnvironmentLinks from "../environments/EnvironmentLinks.ts";
-import * as ManagedEndpointProvider from "../environments/ManagedEndpointProvider.ts";
-
-vi.mock("@clerk/backend", () => ({
-  createClerkClient: vi.fn(),
-  verifyToken: vi.fn(),
-}));
 
 const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
   relayIssuer: "https://relay.example.test",
@@ -49,68 +41,85 @@ const relaySettings: RelayConfiguration.RelayConfiguration["Service"] = {
     bundleId: "com.example.t3",
     environment: "sandbox",
   },
-  clerkSecretKey: Redacted.make("clerk-secret-key"),
-  clerkPublishableKey: "pk_test_test",
-  clerkJwtAudience: "t3-code-relay",
+  zeropsApiHost: "relay-test.zerops.invalid",
   apnsDeliveryJobSigningSecret: Redacted.make("apns-delivery-secret"),
   cloudMintPrivateKey: Redacted.make("cloud-mint-private-key"),
   cloudMintPublicKey: "cloud-mint-public-key",
-  managedEndpointBaseDomain: undefined,
-  managedEndpointNamespace: undefined,
 };
 
-describe("relay client authentication", () => {
-  it.effect("preserves the existing Clerk session JWT path", () =>
-    Effect.gen(function* () {
-      vi.mocked(verifyToken).mockResolvedValue({
-        sub: "user_session",
-        aud: relaySettings.clerkJwtAudience,
-      } as never);
-
-      expect(yield* verifyRelayClientBearerToken(relaySettings, "session-token")).toEqual({
-        sub: "user_session",
-        mode: "clerk_session_bearer",
-      });
-      expect(verifyToken).toHaveBeenCalledWith("session-token", {
-        secretKey: "clerk-secret-key",
-        audience: relaySettings.clerkJwtAudience,
-      });
-      expect(createClerkClient).not.toHaveBeenCalled();
-    }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
-      ),
+function fakeZeropsHttpClientLayer(route: (url: string) => Response) {
+  return Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, route(request.url))),
     ),
   );
+}
 
-  it.effect("falls back to Clerk OAuth token verification for the headless CLI", () =>
-    Effect.gen(function* () {
-      vi.mocked(verifyToken).mockRejectedValue(new Error("not a session JWT"));
-      vi.mocked(createClerkClient).mockReturnValue({
-        authenticateRequest: vi.fn().mockResolvedValue({
-          isAuthenticated: true,
-          toAuth: () => ({ userId: "user_oauth" }),
+const clientAuthRequest = () =>
+  HttpServerRequest.fromWeb(new Request("https://relay.test/v1/client/environment-links"));
+
+describe("relay client authentication", () => {
+  it.effect("resolves the caller's Zerops user id from a valid bearer token", () => {
+    let seenPrincipal: { readonly userId: string; readonly token: string } | null = null;
+    return Effect.gen(function* () {
+      const auth = yield* RelayClientAuth;
+      yield* auth.clientBearer(
+        Effect.gen(function* () {
+          const { userId, token } = yield* RelayClientPrincipal;
+          seenPrincipal = { userId, token };
+          return HttpServerResponse.empty();
         }),
-      } as never);
+        { credential: Redacted.make("zerops-token"), endpoint: {} as never, group: {} as never },
+      );
 
-      expect(yield* verifyRelayClientBearerToken(relaySettings, "oauth-token")).toEqual({
-        sub: "user_oauth",
-        mode: "clerk_oauth_bearer",
-      });
-      expect(createClerkClient).toHaveBeenCalledWith({
-        secretKey: "clerk-secret-key",
-        publishableKey: "pk_test_test",
-      });
+      expect(seenPrincipal).toEqual({ userId: "user_zerops", token: "zerops-token" });
     }).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          vi.mocked(verifyToken).mockReset();
-          vi.mocked(createClerkClient).mockReset();
-        }),
+      Effect.provideService(HttpServerRequest.HttpServerRequest, clientAuthRequest()),
+      Effect.provideService(HttpServerRequest.ParsedSearchParams, {}),
+      Effect.provideService(HttpRouter.RouteContext, { params: {}, route: {} as never }),
+      Effect.provide(
+        relayClientAuthLayer.pipe(
+          Layer.provide(RelayConfiguration.layer(relaySettings)),
+          Layer.provide(
+            fakeZeropsHttpClientLayer((url) =>
+              url.endsWith("/user/info")
+                ? new Response(JSON.stringify({ id: "user_zerops" }), {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                  })
+                : new Response(null, { status: 500 }),
+            ),
+          ),
+        ),
       ),
+      Effect.scoped,
+    );
+  });
+
+  it.effect("rejects an invalid bearer token", () =>
+    Effect.gen(function* () {
+      const auth = yield* RelayClientAuth;
+      const error = yield* Effect.flip(
+        auth.clientBearer(Effect.succeed(HttpServerResponse.empty()), {
+          credential: Redacted.make("bad-token"),
+          endpoint: {} as never,
+          group: {} as never,
+        }),
+      );
+
+      expect(error).toMatchObject({ _tag: "RelayAuthInvalidError", reason: "invalid_bearer" });
+    }).pipe(
+      Effect.provideService(HttpServerRequest.HttpServerRequest, clientAuthRequest()),
+      Effect.provideService(HttpServerRequest.ParsedSearchParams, {}),
+      Effect.provideService(HttpRouter.RouteContext, { params: {}, route: {} as never }),
+      Effect.provide(
+        relayClientAuthLayer.pipe(
+          Layer.provide(RelayConfiguration.layer(relaySettings)),
+          Layer.provide(fakeZeropsHttpClientLayer(() => new Response(null, { status: 401 }))),
+        ),
+      ),
+      Effect.scoped,
     ),
   );
 });
@@ -124,7 +133,6 @@ describe("relay environment authentication", () => {
     const credentials: EnvironmentCredentials.EnvironmentCredentials["Service"] = {
       create: () => Effect.die("unused create"),
       authenticate: () => Effect.fail(failure),
-      revokeForEnvironmentPublicKey: () => Effect.die("unused revoke"),
     };
 
     return Effect.gen(function* () {
@@ -157,240 +165,6 @@ describe("relay environment authentication", () => {
         ),
       ),
       Effect.scoped,
-    );
-  });
-});
-
-function relayUnlinkTestLayer(input?: {
-  readonly withTransaction?: RelayDb.RelayTransactions["Service"]["withTransaction"];
-  readonly getForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["getForUser"];
-  readonly revokeForUser?: EnvironmentLinks.EnvironmentLinks["Service"]["revokeForUser"];
-  readonly revokeCredential?: EnvironmentCredentials.EnvironmentCredentials["Service"]["revokeForEnvironmentPublicKey"];
-  readonly prepareDeprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["prepareDeprovision"];
-  readonly deprovision?: ManagedEndpointProvider.ManagedEndpointProvider["Service"]["deprovision"];
-}) {
-  return Layer.mergeAll(
-    Layer.succeed(
-      RelayDb.RelayTransactions,
-      RelayDb.RelayTransactions.of({
-        withTransaction: input?.withTransaction ?? ((effect) => effect),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentLinks.EnvironmentLinks,
-      EnvironmentLinks.EnvironmentLinks.of({
-        upsert: () => Effect.die("unused upsert"),
-        listUsersForEnvironment: () => Effect.die("unused listUsersForEnvironment"),
-        listDeliveryUsersForEnvironment: () => Effect.die("unused listDeliveryUsersForEnvironment"),
-        listPublicKeysForEnvironment: () => Effect.die("unused listPublicKeysForEnvironment"),
-        listForUser: () => Effect.die("unused listForUser"),
-        getForUser: input?.getForUser ?? (() => Effect.succeed(null)),
-        revokeForUser: input?.revokeForUser ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      EnvironmentCredentials.EnvironmentCredentials,
-      EnvironmentCredentials.EnvironmentCredentials.of({
-        create: () => Effect.die("unused create"),
-        authenticate: () => Effect.die("unused authenticate"),
-        revokeForEnvironmentPublicKey: input?.revokeCredential ?? (() => Effect.succeed(false)),
-      }),
-    ),
-    Layer.succeed(
-      ManagedEndpointProvider.ManagedEndpointProvider,
-      ManagedEndpointProvider.ManagedEndpointProvider.of({
-        provision: () => Effect.die("unused provision"),
-        prepareDeprovision: input?.prepareDeprovision ?? (() => Effect.succeed(null)),
-        deprovision: input?.deprovision ?? (() => Effect.void),
-        release: () => Effect.die("unused release"),
-      }),
-    ),
-  );
-}
-
-const linkedEnvironmentRecord = {
-  environmentId: EnvironmentId.make("environment-1"),
-  label: "Environment 1",
-  endpoint: {
-    httpBaseUrl: "https://environment-1.example.test/",
-    wsBaseUrl: "wss://environment-1.example.test/ws",
-    providerKind: "cloudflare_tunnel",
-  },
-  environmentPublicKey: "public-key",
-  linkedAt: "2026-07-28T00:00:00.000Z",
-} as const;
-
-describe("relay environment unlink", () => {
-  it.effect("revokes the link and its credentials in one database transaction", () => {
-    const calls: Array<string> = [];
-    return Effect.gen(function* () {
-      expect(
-        yield* revokeEnvironmentLinkRecord({
-          userId: "user-1",
-          environmentId: "environment-1",
-          environmentPublicKey: "public-key",
-        }),
-      ).toBe(true);
-      expect(calls).toEqual(["transaction", "link", "credential"]);
-    }).pipe(
-      Effect.provide(
-        relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
-          revokeForUser: () =>
-            Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
-              return true;
-            }),
-        }),
-      ),
-    );
-  });
-
-  it.effect("commits database revocation before deprovisioning the managed endpoint", () => {
-    const calls: Array<string> = [];
-    const deprovisionTarget = {
-      userId: "user-1",
-      environmentId: "environment-1",
-      hostname: "environment-1.example.test",
-      tunnelId: "tunnel-1",
-      tunnelName: "environment-1-tunnel",
-      dnsRecordId: "dns-1",
-      readyAt: "2026-07-28T00:00:00.000Z",
-      updatedAt: "generation-before-unlink",
-    } satisfies ManagedEndpointProvider.ManagedEndpointDeprovisionTarget;
-
-    return Effect.gen(function* () {
-      expect(
-        yield* unlinkEnvironmentRecord({
-          userId: "user-1",
-          environmentId: "environment-1",
-        }),
-      ).toBe(true);
-      expect(calls).toEqual([
-        "prepare",
-        "lookup",
-        "transaction",
-        "link",
-        "credential",
-        "deprovision",
-      ]);
-    }).pipe(
-      Effect.provide(
-        relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
-          getForUser: () =>
-            Effect.sync(() => {
-              calls.push("lookup");
-              return linkedEnvironmentRecord;
-            }),
-          revokeForUser: () =>
-            Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
-              return true;
-            }),
-          prepareDeprovision: () =>
-            Effect.sync(() => {
-              calls.push("prepare");
-              return deprovisionTarget;
-            }),
-          deprovision: (request) =>
-            Effect.sync(() => {
-              expect(request.target).toBe(deprovisionTarget);
-              calls.push("deprovision");
-            }),
-        }),
-      ),
-    );
-  });
-
-  it.effect("does not deprovision when database revocation fails", () => {
-    const calls: Array<string> = [];
-    const failure = new EnvironmentCredentials.EnvironmentCredentialRevokePersistenceError({
-      environmentId: "environment-1",
-      cause: "database unavailable",
-    });
-
-    return Effect.gen(function* () {
-      expect(
-        yield* Effect.flip(
-          unlinkEnvironmentRecord({
-            userId: "user-1",
-            environmentId: "environment-1",
-          }),
-        ),
-      ).toBe(failure);
-      expect(calls).toEqual(["prepare", "transaction", "link", "credential"]);
-    }).pipe(
-      Effect.provide(
-        relayUnlinkTestLayer({
-          withTransaction: (effect) => {
-            calls.push("transaction");
-            return effect;
-          },
-          getForUser: () => Effect.succeed(linkedEnvironmentRecord),
-          revokeForUser: () =>
-            Effect.sync(() => {
-              calls.push("link");
-              return true;
-            }),
-          revokeCredential: () =>
-            Effect.sync(() => {
-              calls.push("credential");
-            }).pipe(Effect.andThen(Effect.fail(failure))),
-          prepareDeprovision: () =>
-            Effect.sync(() => {
-              calls.push("prepare");
-              return null;
-            }),
-          deprovision: () =>
-            Effect.sync(() => {
-              calls.push("deprovision");
-            }),
-        }),
-      ),
-    );
-  });
-
-  it.effect("retries deprovisioning after the link is already revoked", () => {
-    const calls: Array<string> = [];
-    return Effect.gen(function* () {
-      expect(
-        yield* unlinkEnvironmentRecord({
-          userId: "user-1",
-          environmentId: "environment-1",
-        }),
-      ).toBe(false);
-      expect(calls).toEqual(["prepare", "deprovision"]);
-    }).pipe(
-      Effect.provide(
-        relayUnlinkTestLayer({
-          prepareDeprovision: () =>
-            Effect.sync(() => {
-              calls.push("prepare");
-              return null;
-            }),
-          deprovision: () =>
-            Effect.sync(() => {
-              calls.push("deprovision");
-            }),
-        }),
-      ),
     );
   });
 });

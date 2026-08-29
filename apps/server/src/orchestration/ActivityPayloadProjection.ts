@@ -4,7 +4,9 @@ import type {
   OrchestrationThreadDetailSnapshot,
 } from "@t3tools/contracts";
 
-import { projectZeropsResult } from "../zerops/zeropsActivityResult.ts";
+import { sniffToolCallShape } from "../spi/toolCall.ts";
+import { projectZeropsToolCall } from "../zerops/zeropsActivityResult.ts";
+import { isZeropsToolName } from "../zerops/zeropsToolResult.ts";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -356,8 +358,17 @@ export function projectActivityPayload(
    * the tool NAME and it sits HERE rather than inside the mcp branch, because
    * Claude types `mcp__zerops__zerops_delete` as `file_change` — an
    * mcp-branch-only hook would drop exactly the calls that rename around it.
+   *
+   * This activity has no `provider` field (`OrchestrationThreadActivity` is
+   * driver-agnostic) to call the SPI's provider-keyed `readToolCall` with, so
+   * it shape-sniffs instead — see `sniffToolCallShape`'s doc comment.
    */
-  const zerops = projectZeropsResult(data);
+  const sniffed = sniffToolCallShape(data);
+  const zerops = projectZeropsToolCall(
+    sniffed.kind === "toolCall" && isZeropsToolName(sniffed.call.rawName)
+      ? sniffed.call
+      : undefined,
+  );
 
   if (payload.itemType === "mcp_tool_call") {
     return {

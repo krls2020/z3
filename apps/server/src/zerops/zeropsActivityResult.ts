@@ -19,7 +19,9 @@
  *
  * Contract: `../zcp/plans/z3-s6-ui-plan-2026-08-28.md` D-U1.
  */
-import { readZeropsToolCallData } from "./zeropsToolResult.ts";
+import type { SpiEvent, SpiToolCall } from "@t3tools/contracts";
+
+import { readZeropsToolCall } from "./zeropsToolResult.ts";
 
 /**
  * How much result text may ride on one activity, in UTF-16 code units.
@@ -44,23 +46,35 @@ export interface ZeropsActivityResult {
 }
 
 /**
- * The Zerops result carried by an item payload's `data`, or undefined when the
- * item is not a `zerops_*` call.
+ * The bounded projection of one already-resolved `zerops_*` tool call, or
+ * undefined when there is none. Shared core: `projectZeropsResult` below is
+ * the SPI-boundary-respecting entry point (`event.toolCall`, filtered by
+ * name); `apps/server/src/orchestration/ActivityPayloadProjection.ts` — the
+ * one caller with no `SpiEvent` to read `.toolCall` from — reaches this
+ * through `apps/server/src/spi/toolCall.ts`'s `sniffToolCallShape` instead.
  *
  * Over the limit the text is dropped WHOLE, never sliced. Half a JSON document
  * parses as nothing, and a card rendering from a truncated document would
  * render a lie; a client that gets `truncated` degrades to the generic tool
  * block, which is what it already does for any payload it cannot decode.
  */
-export const projectZeropsResult = (data: unknown): ZeropsActivityResult | undefined => {
-  const call = readZeropsToolCallData(data);
+export const projectZeropsToolCall = (
+  call: SpiToolCall | undefined,
+): ZeropsActivityResult | undefined => {
   if (call === undefined) {
     return undefined;
   }
-  if (call.resultText === undefined) {
-    return { toolName: call.toolName };
+  if (call.result === undefined) {
+    return { toolName: call.name };
   }
-  return call.resultText.length > ZEROPS_RESULT_TEXT_LIMIT
-    ? { toolName: call.toolName, truncated: true }
-    : { toolName: call.toolName, resultText: call.resultText };
+  return call.result.text.length > ZEROPS_RESULT_TEXT_LIMIT
+    ? { toolName: call.name, truncated: true }
+    : { toolName: call.name, resultText: call.result.text };
 };
+
+/**
+ * The Zerops result carried by one event's `toolCall`, or undefined when the
+ * event is not a `zerops_*` call.
+ */
+export const projectZeropsResult = (event: SpiEvent): ZeropsActivityResult | undefined =>
+  projectZeropsToolCall(readZeropsToolCall(event));

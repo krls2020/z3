@@ -5,9 +5,11 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 
-import type { ProviderRuntimeEvent } from "@t3tools/contracts";
+import type { ItemLifecyclePayload, SpiEvent } from "@t3tools/contracts";
 
+import { applyToolCall } from "../spi/toolCall.ts";
 import { ZeropsCliFailed, ZeropsCliNotFound, type ZeropsCli } from "./ZeropsCli.ts";
 import * as ZeropsTopology from "./ZeropsTopology.ts";
 import type { ZeropsTopologyRead } from "./zeropsTopologyParse.ts";
@@ -60,6 +62,8 @@ const makeFakeCli = (
           yield* Deferred.succeed(watcherAttached, undefined);
           yield* Deferred.await(watcherRunning);
         }),
+      // Unused by ZeropsTopology — the agent-auth feed is the only caller.
+      markAgentOAuth: () => Effect.die("markAgentOAuth is not used by ZeropsTopology"),
     };
 
     const ringDoorbell = (type: string) =>
@@ -71,7 +75,54 @@ const makeFakeCli = (
     return { service, reads, ringDoorbell, watchStarts } satisfies FakeCli;
   });
 
-const noToolEvents = Stream.empty as Stream.Stream<ProviderRuntimeEvent>;
+const noToolEvents = Stream.empty as Stream.Stream<SpiEvent>;
+
+/** An enriched (`.toolCall` attached) Claude `item.completed` for one `zerops_*` tool. */
+const zeropsToolCompletedEvent = (): SpiEvent =>
+  applyToolCall({
+    eventId: "evt-1",
+    provider: "claudeAgent",
+    threadId: "thread-1",
+    createdAt: "2026-08-29T00:00:00Z",
+    type: "item.completed",
+    itemId: "item-1",
+    payload: {
+      itemType: "mcp_tool_call",
+      status: "completed",
+      data: {
+        toolName: "mcp__zerops__zerops_deploy",
+        input: { hostname: "kanbandev" },
+        result: {
+          type: "tool_result",
+          content: [{ type: "text", text: '{"status":"ok"}' }],
+        },
+      },
+    } satisfies ItemLifecyclePayload,
+  } as SpiEvent);
+
+/** An enriched non-`zerops_*` tool call — must never nudge the poll. */
+const otherToolCompletedEvent = (): SpiEvent =>
+  applyToolCall({
+    eventId: "evt-2",
+    provider: "claudeAgent",
+    threadId: "thread-1",
+    createdAt: "2026-08-29T00:00:00Z",
+    type: "item.completed",
+    itemId: "item-2",
+    payload: {
+      itemType: "command_execution",
+      status: "completed",
+      data: {
+        toolName: "Bash",
+        input: { command: "ls" },
+        result: { type: "tool_result", content: [{ type: "text", text: "ok" }] },
+      },
+    } satisfies ItemLifecyclePayload,
+  } as SpiEvent);
+
+/** Lets a just-forked fiber run to its first suspension point. */
+const advanceTestClock = (ms: number) =>
+  TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
 describe("ZeropsTopology", () => {
   it.effect("publishes a snapshot from the first read", () =>
@@ -389,6 +440,57 @@ describe("ZeropsTopology — more than one subscriber over the server's life", (
 
         yield* topology.refresh;
         expect(yield* Queue.take(seen)).toBe(2);
+      }),
+    ),
+  );
+});
+
+describe("ZeropsTopology — the post-tool nudge (SPI-4: gated on event.toolCall)", () => {
+  it.effect("nudges a refresh after a completed zerops_* tool call", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli((attempt) =>
+          Effect.succeed(attempt === 1 ? read(["kanbandev"]) : read(["kanbandev", "db"])),
+        );
+        const toolEvents = yield* Queue.unbounded<SpiEvent>();
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: Stream.fromQueue(toolEvents),
+          isZeropsEnvironment: true,
+        });
+
+        const subscription = yield* topology.subscribe;
+        const nextSnapshot = yield* Stream.runHead(subscription.changes).pipe(Effect.forkChild);
+
+        yield* Queue.offer(toolEvents, zeropsToolCompletedEvent());
+        const published = yield* Fiber.join(nextSnapshot);
+
+        expect(yield* Ref.get(fake.reads)).toBe(2);
+        expect(
+          published._tag === "Some"
+            ? published.value.services.map((service) => service.hostname)
+            : [],
+        ).toEqual(["kanbandev", "db"]);
+      }),
+    ),
+  );
+
+  it.effect("does not nudge for a completed tool call that is not zerops_*", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fake = yield* makeFakeCli(() => Effect.succeed(read(["kanbandev"])));
+        const toolEvents = yield* Queue.unbounded<SpiEvent>();
+        const topology = yield* ZeropsTopology.make({
+          cli: fake.service,
+          toolEvents: Stream.fromQueue(toolEvents),
+          isZeropsEnvironment: true,
+        });
+
+        yield* Queue.offer(toolEvents, otherToolCompletedEvent());
+        yield* advanceTestClock(50);
+
+        // Only the one read from `make()`'s initial refresh — no nudge fired.
+        expect(yield* Ref.get(fake.reads)).toBe(1);
       }),
     ),
   );

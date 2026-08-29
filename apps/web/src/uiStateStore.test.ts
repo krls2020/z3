@@ -11,7 +11,6 @@ import {
   persistState,
   reorderProjects,
   resolveProjectExpanded,
-  setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
   setThreadChangedFilesExpanded,
   type UiState,
@@ -23,7 +22,6 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
-    defaultAdvertisedEndpointKey: null,
     ...overrides,
   };
 }
@@ -134,16 +132,6 @@ describe("uiStateStore pure functions", () => {
       },
     });
   });
-
-  it("stores the endpoint preference by stable key", () => {
-    const next = setDefaultAdvertisedEndpointKey(makeUiState(), "desktop-core:lan:http");
-
-    expect(next.defaultAdvertisedEndpointKey).toBe("desktop-core:lan:http");
-    expect(setDefaultAdvertisedEndpointKey(next, "desktop-core:lan:http")).toBe(next);
-    expect(setDefaultAdvertisedEndpointKey(next, "")).toMatchObject({
-      defaultAdvertisedEndpointKey: null,
-    });
-  });
 });
 
 describe("parsePersistedState", () => {
@@ -158,7 +146,6 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
         invalid: "not-a-date",
       },
-      defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -176,7 +163,6 @@ describe("parsePersistedState", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
-      defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -279,7 +265,6 @@ describe("uiStateStore persistence", () => {
           "turn-2": true,
         },
       },
-      defaultAdvertisedEndpointKey: "desktop-core:lan:http",
     });
 
     persistState(state);
@@ -295,7 +280,6 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
-      defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
