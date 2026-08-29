@@ -1,0 +1,7 @@
+{
+  "driver": "claude",
+  "capturedAt": "2026-08-29T00:00:00.000Z",
+  "capturedBy": "spi-2 (hand-authored, no live recording available yet)",
+  "notes": "Proves the replay harness's control-line path: a canUseTool call for AskUserQuestion produces user-input.requested, the harness answers it, the adapter emits user-input.resolved and the canUseTool promise resolves (the turn continues). Not a real Claude CLI capture — SPI-3 supplies real recordings, replayed through this same harness after it merges.",
+  "synthetic": true
+}

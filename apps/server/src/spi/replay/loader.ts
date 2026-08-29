@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 /**
  * SPI replay fixture loader: reads `<dir>/<name>.jsonl` + `<dir>/<name>.meta.json`
  * into a `Fixture` (see types.ts for the line/meta shapes). Pure I/O + parsing —

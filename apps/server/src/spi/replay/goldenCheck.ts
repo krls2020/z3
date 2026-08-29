@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 /**
  * Golden-file checker shared by every driver's replay test: compares an
  * already-redacted event list against the checked-in `<name>.expected.json`
