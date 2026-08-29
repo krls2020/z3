@@ -40,9 +40,11 @@ const AGENT_SIGN_IN_LABELS: Record<ZeropsAgentId, string> = {
 export function ZeropsAgentAuthCard({
   snapshot,
   onSignIn,
+  onCancel,
 }: {
   readonly snapshot: ZeropsAgentAuthSnapshot;
   readonly onSignIn: (agentId: ZeropsAgentId) => void;
+  readonly onCancel: (agentId: ZeropsAgentId) => void;
 }) {
   if (!snapshot.available) {
     return null;
@@ -51,7 +53,12 @@ export function ZeropsAgentAuthCard({
   return (
     <div className="flex flex-col gap-2 rounded-lg border p-3" data-zerops-agent-auth-card>
       {snapshot.agents.map((agent) => (
-        <ZeropsAgentAuthRow key={agent.agentId} agent={agent} onSignIn={onSignIn} />
+        <ZeropsAgentAuthRow
+          key={agent.agentId}
+          agent={agent}
+          onSignIn={onSignIn}
+          onCancel={onCancel}
+        />
       ))}
     </div>
   );
@@ -60,9 +67,11 @@ export function ZeropsAgentAuthCard({
 function ZeropsAgentAuthRow({
   agent,
   onSignIn,
+  onCancel,
 }: {
   readonly agent: ZeropsAgentAuth;
   readonly onSignIn: (agentId: ZeropsAgentId) => void;
+  readonly onCancel: (agentId: ZeropsAgentId) => void;
 }) {
   const login = classifyAgentLogin(agent.login);
   const label = login.kind === "none" ? agentAuthLabel(agent) : agentLoginLabel(login);
@@ -79,7 +88,12 @@ function ZeropsAgentAuthRow({
         <span className="font-medium">{AGENT_NAMES[agent.agentId]}</span>
         <span className="text-muted-foreground text-xs">{label}</span>
       </div>
-      <ZeropsAgentAuthActionSlot agent={agent} login={login} onSignIn={onSignIn} />
+      <ZeropsAgentAuthActionSlot
+        agent={agent}
+        login={login}
+        onSignIn={onSignIn}
+        onCancel={onCancel}
+      />
     </div>
   );
 }
@@ -88,10 +102,12 @@ function ZeropsAgentAuthActionSlot({
   agent,
   login,
   onSignIn,
+  onCancel,
 }: {
   readonly agent: ZeropsAgentAuth;
   readonly login: ZeropsAgentLoginPresentation;
   readonly onSignIn: (agentId: ZeropsAgentId) => void;
+  readonly onCancel: (agentId: ZeropsAgentId) => void;
 }) {
   switch (login.kind) {
     case "none":
@@ -99,24 +115,31 @@ function ZeropsAgentAuthActionSlot({
     case "starting":
     case "menu":
       // The server is running/navigating the CLI's own login flow — nothing
-      // for the user to click until it needs them.
+      // for the user to click until it needs them, other than giving up.
       return (
-        <Button disabled size="compact" variant="outline">
-          Signing in…
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button disabled size="compact" variant="outline">
+            Signing in…
+          </Button>
+          <CancelLoginButton agentId={agent.agentId} onCancel={onCancel} />
+        </div>
       );
     case "awaiting-browser":
       return (
-        <ZeropsAgentLoginAwaitingBrowser
-          agentId={agent.agentId}
-          url={login.url}
-          code={login.code}
-        />
+        <div className="flex items-center gap-2">
+          <ZeropsAgentLoginAwaitingBrowser
+            agentId={agent.agentId}
+            url={login.url}
+            code={login.code}
+          />
+          <CancelLoginButton agentId={agent.agentId} onCancel={onCancel} />
+        </div>
       );
     case "awaiting-code":
       // The label above already says to paste into the terminal; the
-      // terminal pane is what the user acts on next, not a button here.
-      return null;
+      // terminal pane is what the user acts on next — Cancel is still
+      // offered, for a code the user decides not to paste after all.
+      return <CancelLoginButton agentId={agent.agentId} onCancel={onCancel} />;
     case "succeeded":
       return null;
     case "failed":
@@ -132,6 +155,26 @@ function ZeropsAgentAuthActionSlot({
         </Button>
       );
   }
+}
+
+function CancelLoginButton({
+  agentId,
+  onCancel,
+}: {
+  readonly agentId: ZeropsAgentId;
+  readonly onCancel: (agentId: ZeropsAgentId) => void;
+}) {
+  return (
+    <Button
+      onClick={() => {
+        onCancel(agentId);
+      }}
+      size="compact"
+      variant="ghost"
+    >
+      Cancel
+    </Button>
+  );
 }
 
 function ZeropsAgentLoginAwaitingBrowser({

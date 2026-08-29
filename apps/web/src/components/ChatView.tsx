@@ -173,6 +173,7 @@ import { ZeropsLifecycleStrip } from "./zerops/ZeropsLifecycleStrip";
 import { ZeropsAgentAuthCard } from "./zerops/ZeropsAgentAuthCard";
 import { zeropsAgentAuthNeedsAttention } from "../zerops/agentLogin";
 import { useAgentLogin } from "../zerops/useAgentLogin";
+import { useAgentLoginCancel } from "../zerops/useAgentLoginCancel";
 import { useZeropsAgentAuth, useZeropsTopology } from "../zerops/useZeropsFeeds";
 import {
   deriveAgentPanelModel,
@@ -3487,6 +3488,7 @@ function ChatViewContent(props: ChatViewProps) {
   // user's attention (S7 plan D4).
   const zeropsAgentAuth = useZeropsAgentAuth(activeThreadRef?.environmentId ?? null);
   const signInToZeropsAgent = useAgentLogin(activeThreadRef);
+  const cancelZeropsAgentLogin = useAgentLoginCancel(activeThreadRef);
   const openFileSurface = useCallback(
     (relativePath: string) => {
       if (!activeThreadRef || !activeProject) return;
@@ -6976,7 +6978,11 @@ function ChatViewContent(props: ChatViewProps) {
               />
               {zeropsAgentAuth !== undefined && zeropsAgentAuthNeedsAttention(zeropsAgentAuth) ? (
                 <div className="pointer-events-auto mx-auto w-fit max-w-[calc(100%-2rem)] pt-3">
-                  <ZeropsAgentAuthCard onSignIn={signInToZeropsAgent} snapshot={zeropsAgentAuth} />
+                  <ZeropsAgentAuthCard
+                    onCancel={cancelZeropsAgentLogin}
+                    onSignIn={signInToZeropsAgent}
+                    snapshot={zeropsAgentAuth}
+                  />
                 </div>
               ) : null}
             </div>

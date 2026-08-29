@@ -13,6 +13,7 @@ import { zeropsAgentAuthNeedsAttention } from "../../zerops/agentLogin";
 import { zeropsQuickActions } from "../../zerops/quickActions";
 import { buildZeropsServiceMap } from "../../zerops/serviceMap";
 import { useAgentLogin } from "../../zerops/useAgentLogin";
+import { useAgentLoginCancel } from "../../zerops/useAgentLoginCancel";
 import {
   useZeropsAgentAuth,
   useZeropsLifecycle,
@@ -35,6 +36,7 @@ export function ZeropsPanel({
   const threadRef =
     environmentId !== null && threadId !== null ? scopeThreadRef(environmentId, threadId) : null;
   const signInToAgent = useAgentLogin(threadRef);
+  const cancelAgentLogin = useAgentLoginCancel(threadRef);
   const view = buildZeropsServiceMap(topology, lifecycle);
 
   return (
@@ -46,7 +48,11 @@ export function ZeropsPanel({
           <div className="space-y-4">
             <ZeropsServiceMap view={view} />
             {agentAuth !== undefined && zeropsAgentAuthNeedsAttention(agentAuth) ? (
-              <ZeropsAgentAuthCard onSignIn={signInToAgent} snapshot={agentAuth} />
+              <ZeropsAgentAuthCard
+                onCancel={cancelAgentLogin}
+                onSignIn={signInToAgent}
+                snapshot={agentAuth}
+              />
             ) : null}
             <ZeropsQuickActions actions={zeropsQuickActions(topology)} />
           </div>

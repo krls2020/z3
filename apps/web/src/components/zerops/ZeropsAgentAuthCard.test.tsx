@@ -29,7 +29,11 @@ const noop = () => {};
 describe("ZeropsAgentAuthCard", () => {
   it("renders nothing when the feed is not available", () => {
     const html = renderToStaticMarkup(
-      <ZeropsAgentAuthCard snapshot={{ available: false, agents: [] }} onSignIn={noop} />,
+      <ZeropsAgentAuthCard
+        snapshot={{ available: false, agents: [] }}
+        onSignIn={noop}
+        onCancel={noop}
+      />,
     );
 
     expect(html).toBe("");
@@ -48,6 +52,7 @@ describe("ZeropsAgentAuthCard", () => {
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -63,6 +68,7 @@ describe("ZeropsAgentAuthCard", () => {
       <ZeropsAgentAuthCard
         snapshot={snapshot([agent({ agentId: "claude-code", state: "not-authorized" })])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -74,6 +80,7 @@ describe("ZeropsAgentAuthCard", () => {
       <ZeropsAgentAuthCard
         snapshot={snapshot([agent({ agentId: "codex", state: "reconnect" })])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -93,6 +100,7 @@ describe("ZeropsAgentAuthCard", () => {
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -117,6 +125,7 @@ describe("ZeropsAgentAuthCard", () => {
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -136,6 +145,7 @@ describe("ZeropsAgentAuthCard", () => {
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -160,6 +170,7 @@ describe("ZeropsAgentAuthCard", () => {
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -180,6 +191,7 @@ describe("ZeropsAgentAuthCard", () => {
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -199,6 +211,7 @@ describe("ZeropsAgentAuthCard", () => {
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -224,6 +237,7 @@ describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)"
           agent({ agentId: "claude-code", login: loginState({ phase: "menu" }) }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -246,6 +260,7 @@ describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)"
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -270,6 +285,7 @@ describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)"
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
     expect(codexHtml).toContain("Copy code ABCD-12345");
@@ -287,23 +303,25 @@ describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)"
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
     expect(claudeHtml).not.toContain("Copy code");
   });
 
-  it("shows the paste-into-terminal prompt with no button in awaiting-code", () => {
+  it("shows the paste-into-terminal prompt and a Cancel button in awaiting-code (S7 fix2 finding 4)", () => {
     const html = renderToStaticMarkup(
       <ZeropsAgentAuthCard
         snapshot={snapshot([
           agent({ agentId: "claude-code", login: loginState({ phase: "awaiting-code" }) }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
     expect(html).toContain("Paste the code into the terminal below");
-    expect(html).not.toContain("<button");
+    expect(html).toContain(">Cancel<");
   });
 
   it("shows Authorized with no button once succeeded", () => {
@@ -313,6 +331,7 @@ describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)"
           agent({ agentId: "claude-code", login: loginState({ phase: "succeeded" }) }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -330,6 +349,7 @@ describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)"
           }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
@@ -344,10 +364,81 @@ describe("ZeropsAgentAuthCard — server-driven login session (S7 follow-up F8)"
           agent({ agentId: "claude-code", login: loginState({ phase: "cancelled" }) }),
         ])}
         onSignIn={noop}
+        onCancel={noop}
       />,
     );
 
     expect(html).toContain("Not signed in");
     expect(html).toContain("Sign in to Claude");
+  });
+});
+
+/**
+ * S7 fix2 finding 4: the card had no way to stop an in-progress login
+ * session — the second live pass had nothing to abandon a stuck flow with
+ * except reloading the page.
+ */
+describe("ZeropsAgentAuthCard — cancel (S7 fix2 finding 4)", () => {
+  it.each(["starting", "menu", "awaiting-browser", "awaiting-code"] as const)(
+    "shows a Cancel button while phase is %s",
+    (phase) => {
+      const html = renderToStaticMarkup(
+        <ZeropsAgentAuthCard
+          snapshot={snapshot([agent({ agentId: "claude-code", login: loginState({ phase }) })])}
+          onSignIn={noop}
+          onCancel={noop}
+        />,
+      );
+
+      expect(html).toContain(">Cancel<");
+    },
+  );
+
+  it.each(["succeeded", "failed", "cancelled"] as const)(
+    "shows no Cancel button once phase is %s (session already ended)",
+    (phase) => {
+      const html = renderToStaticMarkup(
+        <ZeropsAgentAuthCard
+          snapshot={snapshot([agent({ agentId: "claude-code", login: loginState({ phase }) })])}
+          onSignIn={noop}
+          onCancel={noop}
+        />,
+      );
+
+      expect(html).not.toContain(">Cancel<");
+    },
+  );
+
+  it("shows no Cancel button when there is no active session", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([agent({ agentId: "claude-code", state: "not-authorized" })])}
+        onSignIn={noop}
+        onCancel={noop}
+      />,
+    );
+
+    expect(html).not.toContain(">Cancel<");
+  });
+
+  it("still shows Open sign-in link / Copy link alongside Cancel in awaiting-browser", () => {
+    const html = renderToStaticMarkup(
+      <ZeropsAgentAuthCard
+        snapshot={snapshot([
+          agent({
+            agentId: "claude-code",
+            login: loginState({
+              phase: "awaiting-browser",
+              url: "https://claude.com/cai/oauth/authorize",
+            }),
+          }),
+        ])}
+        onSignIn={noop}
+        onCancel={noop}
+      />,
+    );
+
+    expect(html).toContain("Open sign-in link");
+    expect(html).toContain(">Cancel<");
   });
 });
