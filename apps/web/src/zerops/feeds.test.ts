@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import { EnvironmentId, ThreadId, WS_METHODS } from "@t3tools/contracts";
-import type { ZeropsLifecycle, ZeropsTopologySnapshot } from "@t3tools/contracts";
+import type {
+  ZeropsAgentAuthSnapshot,
+  ZeropsLifecycle,
+  ZeropsTopologySnapshot,
+} from "@t3tools/contracts";
 import { EnvironmentRegistry, EnvironmentSupervisor } from "@t3tools/client-runtime/connection";
 import { type RpcSession } from "@t3tools/client-runtime/rpc";
 import * as Effect from "effect/Effect";
@@ -42,6 +46,22 @@ const snapshot = (
 const lifecycleOf = (threadId: ThreadId): ZeropsLifecycle =>
   ({ threadId, recentTools: [] }) as unknown as ZeropsLifecycle;
 
+const agentAuthSnapshot = (
+  overrides?: Partial<ZeropsAgentAuthSnapshot>,
+): ZeropsAgentAuthSnapshot => ({
+  available: true,
+  agents: [
+    {
+      agentId: "claude-code",
+      credPresent: false,
+      flagOAuth: false,
+      flagToken: false,
+      state: "not-authorized",
+    },
+  ],
+  ...overrides,
+});
+
 /**
  * A registry whose session can be replaced, which is exactly what a reconnect
  * looks like from below: `subscribeDynamic` follows `supervisor.session` and
@@ -57,6 +77,7 @@ const makeHarness = Effect.gen(function* () {
   const calls: string[] = [];
   const topologyRef = yield* SubscriptionRef.make(Option.none<ZeropsTopologySnapshot>());
   const lifecycleRef = yield* SubscriptionRef.make(Option.none<ZeropsLifecycle>());
+  const agentAuthRef = yield* SubscriptionRef.make(Option.none<ZeropsAgentAuthSnapshot>());
 
   const makeSession = (): RpcSession => {
     const client = {
@@ -73,6 +94,13 @@ const makeHarness = Effect.gen(function* () {
           Stream.filter(Option.isSome),
           Stream.map((value) => value.value),
           Stream.filter((entry) => entry.threadId === input.threadId),
+        );
+      },
+      [WS_METHODS.subscribeZeropsAgentAuth]: () => {
+        calls.push("agentAuth");
+        return SubscriptionRef.changes(agentAuthRef).pipe(
+          Stream.filter(Option.isSome),
+          Stream.map((value) => value.value),
         );
       },
     } as unknown as RpcSession["client"];
@@ -116,6 +144,8 @@ const makeHarness = Effect.gen(function* () {
       SubscriptionRef.set(topologyRef, Option.some(value)),
     publishLifecycle: (value: ZeropsLifecycle) =>
       SubscriptionRef.set(lifecycleRef, Option.some(value)),
+    publishAgentAuth: (value: ZeropsAgentAuthSnapshot) =>
+      SubscriptionRef.set(agentAuthRef, Option.some(value)),
     /** The socket dropped and came back: a brand-new client for the same environment. */
     reconnect: SubscriptionRef.set(session, Option.some(makeSession())),
   };
@@ -247,6 +277,39 @@ describe("createZeropsFeedAtoms", () => {
 
       expect(value?.available).toBe(false);
       expect(value?.reason).toBe("zcp-not-found");
+    }).pipe(Effect.scoped),
+  );
+
+  /**
+   * Third feed, same shape as topology (one per environment, snapshot-typed):
+   * `createEnvironmentRpcSubscriptionAtomFamily` already carries the
+   * reconnect/re-subscribe behavior generically, pinned once above — this
+   * just checks the agent-auth wiring reaches it.
+   */
+  it.live("delivers the agent auth snapshot the server publishes", () =>
+    Effect.gen(function* () {
+      const rig = yield* makeHarness;
+      const atom = rig.feeds.agentAuthValue({ environmentId: ENVIRONMENT_ID, input: {} });
+      rig.registry.mount(atom);
+
+      yield* rig.publishAgentAuth(agentAuthSnapshot());
+      const value = yield* until(() => rig.registry.get(atom), present);
+
+      expect(value?.agents.map((agent) => agent.agentId)).toEqual(["claude-code"]);
+      expect(rig.calls).toContain("agentAuth");
+    }).pipe(Effect.scoped),
+  );
+
+  it.live("passes an unavailable agent auth feed through as a value, not a failure", () =>
+    Effect.gen(function* () {
+      const rig = yield* makeHarness;
+      const atom = rig.feeds.agentAuthValue({ environmentId: ENVIRONMENT_ID, input: {} });
+      rig.registry.mount(atom);
+
+      yield* rig.publishAgentAuth(agentAuthSnapshot({ available: false, agents: [] }));
+      const value = yield* until(() => rig.registry.get(atom), present);
+
+      expect(value?.available).toBe(false);
     }).pipe(Effect.scoped),
   );
 });

@@ -11,6 +11,7 @@ import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentId,
   ThreadId,
+  ZeropsAgentAuthSnapshot,
   ZeropsLifecycle,
   ZeropsTopologySnapshot,
 } from "@t3tools/contracts";
@@ -41,5 +42,13 @@ export function useZeropsLifecycle(
     environmentId === null || threadId === null
       ? EMPTY_ATOM
       : zeropsFeeds.lifecycleValue({ environmentId, input: { threadId } }),
+  );
+}
+
+export function useZeropsAgentAuth(
+  environmentId: EnvironmentId | null,
+): ZeropsAgentAuthSnapshot | undefined {
+  return useAtomValue(
+    environmentId === null ? EMPTY_ATOM : zeropsFeeds.agentAuthValue({ environmentId, input: {} }),
   );
 }
