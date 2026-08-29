@@ -519,6 +519,11 @@
         "parent_tool_use_id": null,
         "uuid": "3f728bb1-eed1-404c-abe6-ff5309141273"
       }
+    },
+    "toolCall": {
+      "name": "AskUserQuestion",
+      "rawName": "AskUserQuestion",
+      "arguments": {}
     }
   },
   {
@@ -576,6 +581,29 @@
         "session_id": "2c8c77b4-29b9-46ef-bce1-ac5a2013e04f",
         "parent_tool_use_id": null,
         "uuid": "0fe33c7b-f218-4519-b88a-edc31d3f7850"
+      }
+    },
+    "toolCall": {
+      "name": "AskUserQuestion",
+      "rawName": "AskUserQuestion",
+      "arguments": {
+        "questions": [
+          {
+            "question": "Which color do you prefer?",
+            "header": "Color",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Blue",
+                "description": "Pick blue."
+              },
+              {
+                "label": "Green",
+                "description": "Pick green."
+              }
+            ]
+          }
+        ]
       }
     }
   },
@@ -809,6 +837,33 @@
           }
         }
       }
+    },
+    "toolCall": {
+      "name": "AskUserQuestion",
+      "rawName": "AskUserQuestion",
+      "arguments": {
+        "questions": [
+          {
+            "question": "Which color do you prefer?",
+            "header": "Color",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Blue",
+                "description": "Pick blue."
+              },
+              {
+                "label": "Green",
+                "description": "Pick green."
+              }
+            ]
+          }
+        ]
+      },
+      "result": {
+        "text": "Your questions have been answered: \"Which color do you prefer?\"=\"Blue\". You can now continue with these answers in mind.",
+        "failed": false
+      }
     }
   },
   {
@@ -896,6 +951,33 @@
             "Which color do you prefer?": "Blue"
           }
         }
+      }
+    },
+    "toolCall": {
+      "name": "AskUserQuestion",
+      "rawName": "AskUserQuestion",
+      "arguments": {
+        "questions": [
+          {
+            "question": "Which color do you prefer?",
+            "header": "Color",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "Blue",
+                "description": "Pick blue."
+              },
+              {
+                "label": "Green",
+                "description": "Pick green."
+              }
+            ]
+          }
+        ]
+      },
+      "result": {
+        "text": "Your questions have been answered: \"Which color do you prefer?\"=\"Blue\". You can now continue with these answers in mind.",
+        "failed": false
       }
     }
   },

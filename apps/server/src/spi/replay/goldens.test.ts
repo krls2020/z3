@@ -18,6 +18,8 @@ import * as NodeURL from "node:url";
 import type { SpiEvent } from "@t3tools/contracts";
 import { assert, describe, it } from "vite-plus/test";
 
+import { extractZeropsEnvelope } from "../../zerops/zeropsEnvelope.ts";
+import { applyToolCall } from "../toolCall.ts";
 import { replayClaude } from "./claudeReplay.ts";
 import { replayCodex } from "./codexReplay.ts";
 import { recordCursorBaseline, recordGrokBaseline } from "./acpReplay.ts";
@@ -99,7 +101,12 @@ describe("SPI replay goldens", () => {
       async () => {
         const dir = NodePath.join(fixturesRoot, driver);
         const events = await record();
-        const redacted = redact(events as ReadonlyArray<Record<string, unknown>>, {
+        // Goldens capture the enriched bus shape — the SPI boundary
+        // consumers actually read (SPI-4) — not the driver's raw output: a
+        // regression a driver-shape change causes on `event.toolCall` fails
+        // here too, not only downstream in `apps/server/src/zerops/**`.
+        const enriched = events.map(applyToolCall);
+        const redacted = redact(enriched as ReadonlyArray<Record<string, unknown>>, {
           paths: REDACT_PATHS,
           ids: REDACT_IDS,
         });
@@ -115,4 +122,28 @@ describe("SPI replay goldens", () => {
       timeoutMs,
     );
   }
+
+  it("claude/zerops-workflow-envelope: toolCall is populated for both zerops_workflow (fenced prose) and zerops_mount (JSON envelope key), and each result's text decodes an envelope", async () => {
+    const fixture = loadFixture(NodePath.join(fixturesRoot, "claude"), "zerops-workflow-envelope");
+    const events = (await replayClaude(fixture)).map(applyToolCall);
+
+    const workflowCall = events
+      .filter((event) => event.type === "item.completed")
+      .map((event) => event.toolCall)
+      .find((call) => call?.name === "zerops_workflow");
+    const mountCall = events
+      .filter((event) => event.type === "item.completed")
+      .map((event) => event.toolCall)
+      .find((call) => call?.name === "zerops_mount");
+
+    assert.exists(workflowCall, "zerops_workflow item.completed should carry a toolCall");
+    assert.exists(mountCall, "zerops_mount item.completed should carry a toolCall");
+
+    for (const call of [workflowCall, mountCall]) {
+      assert.exists(call?.result, `${call?.name}: toolCall.result should be present`);
+      assert.strictEqual(call?.result?.failed, false, `${call?.name}: toolCall.result.failed`);
+      const envelope = extractZeropsEnvelope(call?.result?.text ?? "");
+      assert.exists(envelope, `${call?.name}: result.text should decode a zcp envelope`);
+    }
+  }, 20_000);
 });

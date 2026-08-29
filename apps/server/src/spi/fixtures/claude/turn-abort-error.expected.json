@@ -613,6 +613,11 @@
         "parent_tool_use_id": null,
         "uuid": "1bb404e7-74df-4bde-9371-251dea8ae8fd"
       }
+    },
+    "toolCall": {
+      "name": "ToolSearch",
+      "rawName": "ToolSearch",
+      "arguments": {}
     }
   },
   {
@@ -717,6 +722,11 @@
         "uuid": "0e290360-c5ae-4866-8a40-f6a52b0e4301",
         "queued_turn_count": 0
       }
+    },
+    "toolCall": {
+      "name": "ToolSearch",
+      "rawName": "ToolSearch",
+      "arguments": {}
     }
   },
   {
