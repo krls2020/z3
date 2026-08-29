@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 /**
  * `watchWithFallback` — plain Node `fs.watch`, not Effect's wrapped version.
  *

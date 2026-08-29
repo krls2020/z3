@@ -1,3 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalDate:off
+// @effect-diagnostics globalTimers:off
+// Exercises watchWithFallback's own plain-Node behavior directly — see that
+// module's header comment for why it deliberately bypasses Effect's
+// FileSystem.watch.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
