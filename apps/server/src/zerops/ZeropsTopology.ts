@@ -34,7 +34,7 @@ import * as Stream from "effect/Stream";
 import type { ProviderRuntimeEvent, ZeropsTopologySnapshot } from "@t3tools/contracts";
 
 import { ServerConfig } from "../config.ts";
-import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ProviderRuntimeEventBus } from "../spi/ProviderRuntimeEventBus.ts";
 import { subscribeBeforeSnapshot } from "../utils/subscribeBeforeSnapshot.ts";
 import * as ZeropsCliModule from "./ZeropsCli.ts";
 import { isZeropsEnvironment } from "./ZeropsEnvironment.ts";
@@ -329,11 +329,11 @@ export const layer = Layer.effect(
   ZeropsTopology,
   Effect.gen(function* () {
     const cli = yield* ZeropsCli;
-    const provider = yield* ProviderService;
+    const bus = yield* ProviderRuntimeEventBus;
     const config = yield* ServerConfig;
     return yield* make({
       cli,
-      toolEvents: provider.streamEvents,
+      toolEvents: bus.events,
       // The one rule, owned by ZeropsEnvironment: `T3CODE_ZEROPS_PROJECT_ID`
       // set and non-empty. Nothing here re-derives it.
       isZeropsEnvironment: isZeropsEnvironment(config),

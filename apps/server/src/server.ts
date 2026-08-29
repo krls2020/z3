@@ -29,6 +29,7 @@ import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { ZeropsLayerLive } from "./zerops/zeropsFeedsLayer.ts";
+import { ProviderRuntimeEventBusLive } from "./spi/ProviderRuntimeEventBus.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
@@ -123,7 +124,6 @@ import {
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
 import { forkParked, ServerActivation } from "./serverActivation.ts";
 
 // Effect's default preemptive shutdown waits 20s before finalizing request scopes.
@@ -441,13 +441,26 @@ const RuntimeBaseDependenciesLive = RuntimeCoreDependenciesLive.pipe(
 );
 
 /**
+ * `apps/server/src/zerops/**` depends on `ProviderRuntimeEventBus`
+ * (`spi/ProviderRuntimeEventBus.ts`), never on `ProviderService` directly —
+ * that is the SPI seam that keeps the Zerops feeds decoupled from
+ * `~/provider/**`. This composition root is where the bus's own
+ * `ProviderService` requirement is resolved, reusing `ProviderLayerLive`
+ * (memoized, so this does not construct a second provider runtime).
+ */
+const ProviderRuntimeEventBusLayerLive = ProviderRuntimeEventBusLive.pipe(
+  Layer.provide(ProviderLayerLive),
+);
+
+/**
  * The Zerops feeds READ from services the runtime already assembles — the
- * provider event bus and the sqlite store — so they sit on TOP of it rather
- * than beside it. Listed among the `provideMerge` calls above they would be
- * treated as a dependency OF the runtime, and their own requirements would leak
- * out to every caller instead of being satisfied.
+ * provider runtime event bus and the sqlite store — so they sit on TOP of it
+ * rather than beside it. Listed among the `provideMerge` calls above they
+ * would be treated as a dependency OF the runtime, and their own
+ * requirements would leak out to every caller instead of being satisfied.
  */
 const RuntimeDependenciesLive = ZeropsLayerLive.pipe(
+  Layer.provideMerge(ProviderRuntimeEventBusLayerLive),
   Layer.provideMerge(RuntimeBaseDependenciesLive),
 );
 
@@ -503,7 +516,6 @@ export const makeServerLayer = Layer.unwrap(
     const awaitActivation = Deferred.await(activation);
     const activationLayer = Layer.succeed(ServerActivation, awaitActivation);
     const runtimeStateParked = yield* Deferred.make<void>();
-    const tailscaleParked = yield* Deferred.make<void>();
     const cloudLinkParked = yield* Deferred.make<void>();
     const routesReady = yield* Deferred.make<void>();
     const launcherLayer = ServiceLauncherClient.layer;
@@ -549,59 +561,6 @@ export const makeServerLayer = Layer.unwrap(
           ),
       ),
     );
-    const tailscaleServeLayer = config.tailscaleServeEnabled
-      ? Layer.effectDiscard(
-          Effect.acquireRelease(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(tailscaleParked, undefined).pipe(Effect.orDie);
-              yield* awaitActivation;
-              const server = yield* HttpServer.HttpServer;
-              const address = server.address;
-              if (typeof address === "string" || !("port" in address)) {
-                return null;
-              }
-
-              const localPort = address.port;
-              return yield* ensureTailscaleServe({
-                localPort,
-                servePort: config.tailscaleServePort,
-                localHost: "127.0.0.1",
-              }).pipe(
-                Effect.as({ localPort, servePort: config.tailscaleServePort }),
-                Effect.tap(() =>
-                  Effect.logInfo("Tailscale Serve configured", {
-                    localPort,
-                    servePort: config.tailscaleServePort,
-                  }),
-                ),
-                Effect.catch((cause) =>
-                  Effect.logWarning("Failed to configure Tailscale Serve", {
-                    cause,
-                    localPort,
-                    servePort: config.tailscaleServePort,
-                  }).pipe(Effect.as(null)),
-                ),
-              );
-            }),
-            (configured) =>
-              configured
-                ? disableTailscaleServe({ servePort: configured.servePort }).pipe(
-                    Effect.tap(() =>
-                      Effect.logInfo("Tailscale Serve disabled", {
-                        servePort: configured.servePort,
-                      }),
-                    ),
-                    Effect.catch((cause) =>
-                      Effect.logWarning("Failed to disable Tailscale Serve", {
-                        cause,
-                        servePort: configured.servePort,
-                      }),
-                    ),
-                  )
-                : Effect.void,
-          ),
-        )
-      : Layer.empty;
     const cloudDesiredLinkReconcileLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         if (!hasCloudPublicConfig) {
@@ -680,7 +639,6 @@ export const makeServerLayer = Layer.unwrap(
           Deferred.await(runtimeStateParked),
           Deferred.await(cloudLinkParked),
           Deferred.await(routesReady),
-          ...(config.tailscaleServeEnabled ? [Deferred.await(tailscaleParked)] : []),
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
@@ -693,7 +651,6 @@ export const makeServerLayer = Layer.unwrap(
       routesLayer,
       httpListeningLayer,
       runtimeStateLayer,
-      tailscaleServeLayer,
       cloudDesiredLinkReconcileLayer,
     );
 

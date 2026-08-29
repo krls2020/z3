@@ -5,8 +5,7 @@
  * on the environment host.
  *
  * Host precedence: a desktop-SSH environment's real `~/.ssh/config` alias
- * beats server-advertised names; among advertised names the tailnet MagicDNS
- * name beats mDNS `<hostname>.local` (server sends them in that order).
+ * beats server-advertised names (mDNS `<hostname>.local`).
  */
 import type { ConnectionTarget } from "@t3tools/client-runtime/connection";
 import {

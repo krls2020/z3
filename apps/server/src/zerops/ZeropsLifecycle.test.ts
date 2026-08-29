@@ -9,6 +9,7 @@ import type { ItemLifecyclePayload, ProviderRuntimeEvent, ThreadId } from "@t3to
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ZeropsThreadLifecycle from "../persistence/ZeropsThreadLifecycle.ts";
+import { ProviderRuntimeEventBusTest } from "../spi/ProviderRuntimeEventBus.ts";
 import { ZEROPS_ENVELOPE_FENCE } from "./zeropsEnvelope.ts";
 import * as ZeropsLifecycle from "./ZeropsLifecycle.ts";
 
@@ -288,5 +289,31 @@ describe("ZeropsLifecycle", () => {
         expect((yield* restarted.get(THREAD)).envelope?.phase).toBe("develop-active");
       }),
     ).pipe(Effect.provide(persistence)),
+  );
+});
+
+describe("ZeropsLifecycle.layer (wired to the owned ProviderRuntimeEventBus, not ProviderService)", () => {
+  it.effect("ingests an event delivered over the bus", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const bus = yield* Queue.unbounded<ProviderRuntimeEvent>();
+        const layer = ZeropsLifecycle.layer.pipe(
+          Layer.provide(ProviderRuntimeEventBusTest.make(Stream.fromQueue(bus))),
+          Layer.provide(persistence),
+        );
+
+        const published = yield* Effect.gen(function* () {
+          const lifecycle = yield* ZeropsLifecycle.ZeropsLifecycle;
+          const subscription = yield* lifecycle.subscribe(THREAD);
+          const next = yield* Stream.runHead(subscription.changes).pipe(Effect.forkChild);
+          yield* Queue.offer(bus, claudeEvent({}));
+          return yield* Fiber.join(next);
+        }).pipe(Effect.provide(layer));
+
+        expect(published._tag === "Some" ? published.value.envelope?.phase : undefined).toBe(
+          "develop-active",
+        );
+      }),
+    ),
   );
 });

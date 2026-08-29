@@ -16,7 +16,6 @@ the task commands.
   loads the web bundle over the `t3code://` protocol, and owns SSH-managed remote environments.
 - `apps/mobile` (`@t3tools/mobile`): Expo/React Native client. Same client runtime composition as
   web, different platform layer and UI.
-- `apps/marketing` (`@t3tools/marketing`): Astro marketing site.
 
 ## packages
 
@@ -30,8 +29,6 @@ the task commands.
   [README](../../packages/client-runtime/README.md).
 - `packages/ssh` (`@t3tools/ssh`): SSH config parsing, auth prompts, command execution, and the
   tunnel/environment manager behind desktop-managed SSH environments.
-- `packages/tailscale` (`@t3tools/tailscale`): Tailscale CLI wrapper, including the
-  `ensureTailscaleServe` / `disableTailscaleServe` serve lifecycle the server drives.
 - `packages/effect-acp` (`effect-acp`): Effect client and agent implementation of the Agent Client
   Protocol, used by ACP-speaking provider drivers.
 - `packages/effect-codex-app-server` (`effect-codex-app-server`): Effect client for the
