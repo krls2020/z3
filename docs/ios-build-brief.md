@@ -3,7 +3,8 @@
 For an agent picking this up cold. Read [`../README.md`](../README.md) first for what this fork is.
 
 **Repo:** `/Users/macbook/Documents/Zerops-MCP/z3` · branch `main` (tracks
-`origin/main` = `git@github.com:krls2020/z3.git`)
+`origin/main` = `git@github.com:zeropsio/z3.git`; the personal mirror `krls2020/z3` stays on the
+`personal` remote)
 **App:** `apps/mobile` — Expo / React Native, package `@t3tools/mobile`, Expo SDK-managed (no
 `ios/` dir checked in; `expo prebuild` generates it).
 
